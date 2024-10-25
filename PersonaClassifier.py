@@ -18,85 +18,103 @@ from datetime import datetime
 timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
 logging.basicConfig(filename=f'log/log_{timestamp}.log', level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-my_personality_file = 'data/mypersonality.csv'
-main_df = pd.read_csv(my_personality_file, encoding='Windows-1252')
-main_df.drop(columns=['#AUTHID', 'sEXT', 'sNEU', 'sAGR', 'sCON', 'sOPN', 'DATE', 'NETWORKSIZE', 'BETWEENNESS', 'NBETWEENNESS', 'DENSITY', 'BROKERAGE', 'NBROKERAGE','TRANSITIVITY'], inplace=True)
-main_df[['cOPN', 'cEXT', 'cNEU', 'cAGR', 'cCON']] = main_df[['cOPN', 'cEXT', 'cNEU', 'cAGR', 'cCON']].replace({'y': 1, 'n': 0})
-logging.info(f'File={my_personality_file} shape={main_df.shape}')
+def read_data(main_file, liwc_file, is_mypersonality=True):
+    if is_mypersonality:
+        main_df = pd.read_csv(main_file, encoding='Windows-1252')
+        main_df.drop(columns=['#AUTHID', 'sEXT', 'sNEU', 'sAGR', 'sCON', 'sOPN', 'DATE', 'NETWORKSIZE', 'BETWEENNESS', 'NBETWEENNESS', 'DENSITY', 'BROKERAGE', 'NBROKERAGE','TRANSITIVITY'], inplace=True)
+        main_df[['cOPN', 'cEXT', 'cNEU', 'cAGR', 'cCON']] = main_df[['cOPN', 'cEXT', 'cNEU', 'cAGR', 'cCON']].replace({'y': 1, 'n': 0})
+        liwc_df = pd.read_csv(liwc_file)
+        liwc_df = liwc_df.drop(['Unnamed: 0', '#AUTHID', 'ColumnID', 'STATUS'], axis=1)
+    else:
+        main_df = pd.read_csv(main_file)
+        main_df.drop(columns=['#AUTHID'], inplace=True)
+        cols = ['cOPN', 'cEXT', 'cNEU', 'cAGR', 'cCON']
+        for col in cols:
+            mean_value = main_df[col].mean()
+            main_df[f'{col}'] = main_df[col] > mean_value
+        main_df[cols] = main_df[cols].replace({True: 1, False: 0})  
+        liwc_df = pd.read_csv(liwc_file)
+        liwc_df = liwc_df.drop(['Unnamed: 0', '#AUTHID', 'STATUS', 'cOPN', 'cEXT', 'cNEU', 'cAGR', 'cCON', ], axis=1)
 
-liwc_file = 'data/LIWC_mypersonality_oct_2.csv'
-liwc_df = pd.read_csv(liwc_file)
-liwc_df = liwc_df.drop(['Unnamed: 0', 'ColumnID', 'Text'], axis=1)
-logging.info(f'File={liwc_file} shape={liwc_df.shape}')
+    logging.info(f'File={main_file} shape={main_df.shape}')
+    logging.info(f'File={liwc_file} shape={liwc_df.shape}')
 
-df = pd.concat([main_df, liwc_df], axis=1)
-df = df.drop(['#AUTHID'], axis=1)
+    df = pd.concat([main_df, liwc_df], axis=1)
+    logging.info(f'Merged main and liwc files, Shape:{df.shape}')
+    return df
 
-nrc_vad = pd.read_csv('data/NRC-VAD-Lexicon/NRC-VAD-Lexicon.csv', sep="\t")  
-nrc_vad_dict = nrc_vad.set_index('Word').to_dict(orient='index')
-def get_vad_scores(text):
-    words = text.split()
-    valence_scores, arousal_scores, dominance_scores = [], [], []
-    for word in words:
-        word = word.lower()  # Lowercase to match the lexicon
-        if word in nrc_vad_dict:
-            vad_values = nrc_vad_dict[word]
-            valence_scores.append(vad_values['Valence'])
-            arousal_scores.append(vad_values['Arousal'])
-            dominance_scores.append(vad_values['Dominance'])
-    if not valence_scores:
-        return {'Valence': 0, 'Arousal': 0, 'Dominance': 0}
+def process_NRC_VAD(df):
+    nrc_vad = pd.read_csv('data/NRC-VAD-Lexicon/NRC-VAD-Lexicon.csv', sep="\t")  
+    nrc_vad_dict = nrc_vad.set_index('Word').to_dict(orient='index')
+    def get_vad_scores(text):
+        words = text.split()
+        valence_scores, arousal_scores, dominance_scores = [], [], []
+        for word in words:
+            word = word.lower()  # Lowercase to match the lexicon
+            if word in nrc_vad_dict:
+                vad_values = nrc_vad_dict[word]
+                valence_scores.append(vad_values['Valence'])
+                arousal_scores.append(vad_values['Arousal'])
+                dominance_scores.append(vad_values['Dominance'])
+        if not valence_scores:
+            return {'Valence': 0, 'Arousal': 0, 'Dominance': 0}
 
-    valence_avg = sum(valence_scores) / len(valence_scores)
-    arousal_avg = sum(arousal_scores) / len(arousal_scores)
-    dominance_avg = sum(dominance_scores) / len(dominance_scores)
-    return {'Valence': valence_avg, 'Arousal': arousal_avg, 'Dominance': dominance_avg}
+        valence_avg = sum(valence_scores) / len(valence_scores)
+        arousal_avg = sum(arousal_scores) / len(arousal_scores)
+        dominance_avg = sum(dominance_scores) / len(dominance_scores)
+        return {'Valence': valence_avg, 'Arousal': arousal_avg, 'Dominance': dominance_avg}
 
-df['VAD_Scores'] = df['STATUS'].apply( lambda x: get_vad_scores(x))
-df[['Valence', 'Arousal', 'Dominance']] = pd.DataFrame(df['VAD_Scores'].tolist(), index=df.index)
-df.drop(columns=['VAD_Scores'], inplace=True)
-logging.info(f'NRC-VAD shape={df.shape}')
+    df['VAD_Scores'] = df['STATUS'].apply( lambda x: get_vad_scores(x))
+    df[['Valence', 'Arousal', 'Dominance']] = pd.DataFrame(df['VAD_Scores'].tolist(), index=df.index)
+    df.drop(columns=['VAD_Scores'], inplace=True)
+    logging.info(f'NRC-VAD shape={df.shape}')
+    return df
 
-nrc_lexicon = pd.read_csv('data/NRC-Emotion-Lexicon/NRC-Emotion-Lexicon-Wordlevel-v0.92.txt', names=["word", "emotion", "association"],sep="\t", header=None)
-# Filter out words that have no association with emotions (association == 0)
-nrc_lexicon = nrc_lexicon[nrc_lexicon['association'] == 1]
-# nrc_lexicon.drop(columns=['association'], inplace=True)
-nrc_pivot = nrc_lexicon.pivot(index="word", columns="emotion", values="association").fillna(0).astype(int)
-# nrc_pivot.head(2)
-nltk.download('punkt')
-def get_emotion_counts(text, lexicon):
-    # print(text)
-    words = nltk.word_tokenize(text.lower())
-    emotion_count = defaultdict(int)
-    for word in words:
-        if word in lexicon.index:
-            for emotion in lexicon.columns:
-                emotion_count[emotion] += lexicon.loc[word, emotion]
-    return emotion_count
-emotion_counts_list = df['STATUS'].apply(lambda x: get_emotion_counts(x, nrc_pivot))
-emotion_counts_df = pd.DataFrame(emotion_counts_list.tolist())
-emotion_counts_df.fillna(0, inplace=True)
-emotion_counts_df = emotion_counts_df.astype(int)
-df = pd.concat([df, emotion_counts_df], axis=1)
-logging.info(f'NRC-Emotion shape={df.shape}')
+def process_NRC_emotion(df):
+    nrc_lexicon = pd.read_csv('data/NRC-Emotion-Lexicon/NRC-Emotion-Lexicon-Wordlevel-v0.92.txt', names=["word", "emotion", "association"],sep="\t", header=None)
+    # Filter out words that have no association with emotions (association == 0)
+    nrc_lexicon = nrc_lexicon[nrc_lexicon['association'] == 1]
+    # nrc_lexicon.drop(columns=['association'], inplace=True)
+    nrc_pivot = nrc_lexicon.pivot(index="word", columns="emotion", values="association").fillna(0).astype(int)
+    # nrc_pivot.head(2)
+    nltk.download('punkt')
+    def get_emotion_counts(text, lexicon):
+        # print(text)
+        words = nltk.word_tokenize(text.lower())
+        emotion_count = defaultdict(int)
+        for word in words:
+            if word in lexicon.index:
+                for emotion in lexicon.columns:
+                    emotion_count[emotion] += lexicon.loc[word, emotion]
+        return emotion_count
+    emotion_counts_list = df['STATUS'].apply(lambda x: get_emotion_counts(x, nrc_pivot))
+    emotion_counts_df = pd.DataFrame(emotion_counts_list.tolist())
+    emotion_counts_df.fillna(0, inplace=True)
+    emotion_counts_df = emotion_counts_df.astype(int)
+    df = pd.concat([df, emotion_counts_df], axis=1)
+    logging.info(f'NRC-Emotion shape={df.shape}')
+    return df
 
-from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
-analyzer = SentimentIntensityAnalyzer()
-def find_sentiment(text):
-    # print(text)
-    vs = analyzer.polarity_scores(text)
-    sc = vs['compound']
-    # emo = 'pos' if sc >= 0.05 else 'neu' if -0.05 < sc < 0.05 else 'neg'
-    return sc
-df[['sent_score']] = df['STATUS'].apply(lambda x: pd.Series(find_sentiment(x)))
-logging.info(f'VADER shape={df.shape}')
+def process_VADER_sentiment(df):
+    from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
+    analyzer = SentimentIntensityAnalyzer()
+    def find_sentiment(text):
+        # print(text)
+        vs = analyzer.polarity_scores(text)
+        sc = vs['compound']
+        # emo = 'pos' if sc >= 0.05 else 'neu' if -0.05 < sc < 0.05 else 'neg'
+        return sc
+    df[['sent_score']] = df['STATUS'].apply(lambda x: pd.Series(find_sentiment(x)))
+    logging.info(f'VADER shape={df.shape}')
+    logging.info(40*'-')
+    return df
 
-from transformers import AutoTokenizer, AutoModel
-import torch
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+def process_embeddings(df, model_name, batch_size=8):
+    from transformers import AutoTokenizer, AutoModel
+    import torch
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-def get_embeddings(df, model_name, batch_size=8):
-    logging.info(f'Embeding : {model_name}')
+    logging.info(f'Generating Embedding from {model_name}')
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     model = AutoModel.from_pretrained(model_name)
     model.to(device)
@@ -111,20 +129,8 @@ def get_embeddings(df, model_name, batch_size=8):
             outputs = model(**inputs)
         cls_embeddings = outputs.last_hidden_state[:, 0, :]
         embeddings_list.append(cls_embeddings.cpu().numpy())
+    logging.info(f'Embedding Completed for {model_name}')
     return np.vstack(embeddings_list)
-    
-bert_embeddings = get_embeddings(df, 'bert-base-uncased', batch_size=2)
-roberta_embeddings = get_embeddings(df, 'roberta-base', batch_size=2)
-# berttweet_embeddings = get_embeddings(df, 'vinai/bertweet-base', batch_size=2)
-# xlnet_embeddings = get_embeddings(df, 'xlnet-base-cased', batch_size=2)
-df['bert_embeddings'] = list(bert_embeddings)
-df['roberta_embeddings'] = list(roberta_embeddings)
-# df['berttweet_embeddings'] = list(berttweet_embeddings)
-# df['xlnet_embeddings'] = list(xlnet_embeddings)
-
-dff = df.copy()
-dff.fillna(value=0, inplace=True)
-logging.info(f'Preprocessing Completed. Total shape={dff.shape}')
 
 class MLP(nn.Module):
     def __init__(self, input_size, hidden_size, output_size, dropout_rate=0.5):
@@ -213,26 +219,34 @@ def train_val_dl_models(model, train_loader, val_loader, max_grad_norm=1.0, epoc
         val_labels = torch.cat(val_labels)
         val_preds = (val_preds > 0.5).float() 
         val_accuracy = accuracy_score(val_labels.numpy(), val_preds.numpy())
-        if epochs % 4 == 0:
+        if epoch % 4 == 0:
             logging.info(f'Epoch [{epoch + 1}/{epochs}], Train Loss: {total_loss / len(train_loader):.4f}, 'f'Val Loss: {val_loss / len(val_loader):.4f}, Val Accuracy: {val_accuracy:.4f}')
     return val_accuracy
 
 class My_training_class:
-    def __init__(self, dff):
-        self.dff = dff
-    
-    def prepare_dataset(self, embedding_type, target_col):
-        all_cols = self.dff.columns
+    # def __init__(self,  ):
+
+    def preprocess_data(self, main_file, liwc_file, is_mypersonality=True, embedding_model=None):
+        self.df = read_data(main_file, liwc_file, is_mypersonality)
+        self.df = process_NRC_emotion(self.df)
+        self.df = process_VAD_emotion(self.df)
+        self.df = self.df[:3000]
+        self.contextual_embeddings = process_embeddings(self.df, embedding_model) if embedding_model else None
+        self.df.fillna(value=0, inplace=True)
+        logging.info(f'Preprocessing Completed. Total shape={self.df.shape}')
+        logging.info(40*'-')
+
+    def prepare_dataset(self, target_col):
+        all_cols = self.df.columns
         remove_cols = ['STATUS', 'cEXT','cNEU', 'cAGR', 'cCON', 'cOPN']
         emb_cols = ['bert_embeddings', 'berttweet_embeddings', 'xlnet_embeddings', 'roberta_embeddings']
         stat_cols = list (set(all_cols) - set(remove_cols) - set(emb_cols))
-        if embedding_type:
-            contextual_embeddings = np.array(self.dff[embedding_type].tolist())
         scaler = StandardScaler() 
-        stat_features = self.dff[stat_cols]
+        stat_features = self.df[stat_cols]
         stat_features_scaled = scaler.fit_transform(stat_features)
-        X = np.concatenate([stat_features_scaled, contextual_embeddings] if embedding_type else [stat_features_scaled], axis=1)
-        y = np.array(self.dff[[target_col]]) 
+    
+        X = np.concatenate([stat_features_scaled, self.contextual_embeddings] if self.contextual_embeddings is not None else [stat_features_scaled], axis=1)
+        y = np.array(self.df[[target_col]]) 
         self.X_train, self.X_val, self.y_train, self.y_val = train_test_split(X, y, test_size=0.1, random_state=42)
         self.input_dim = self.X_train.shape[1]
         # X_test, X_val, y_test, y_val = train_test_split(X_val, y_val, test_size=0.5, random_state=42)
@@ -245,6 +259,7 @@ class My_training_class:
         val_dataset = TensorDataset(X_val_tensor, y_val_tensor)
         self.train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
         self.val_loader = DataLoader(val_dataset, batch_size=32, shuffle=False)
+        logging.info(40*'-')
 
     def init_models(self):
         self.svm_model = SVC(kernel='linear')
@@ -253,6 +268,7 @@ class My_training_class:
         self.xgb_model = xgb.XGBClassifier(n_estimators=100, learning_rate=0.1, max_depth=6, random_state=42)
         self.bilstm_model = BiLSTMClassifier(input_dim=self.input_dim, hidden_dim=128, output_dim=1, num_layers=2, bidirectional=True, do_attention=True, dropout_rate=0.5)
         self.mlp_model = MLP(input_size=self.input_dim, hidden_size=128, output_size=1, dropout_rate=0.3)
+        logging.info(40*'-')
     
     def fit_validate_and_generate_acc_scr(self):
         self.svm_model.fit(self.X_train, self.y_train)
@@ -276,6 +292,7 @@ class My_training_class:
         logging.info(f'SGBoost Val Acc: {xgb_accuracy:.2f}')
         logging.info(f'MLP Val Acc: {mlp_acc:.2f}')
         logging.info(f'BiLSTM Val Acc: {bilstm_acc:.2f}')
+        logging.info(40*'-')
 
     # def test_model():
     #     model.eval()
@@ -293,17 +310,19 @@ class My_training_class:
             # Print metrics
             # print(f"Accuracy: {accuracy:.4f}, Precision: {precision:.4f}, Recall: {recall:.4f}, F1 Score: {f1:.4f}")
 
-    def train_all_models(self,embedding_type):
-        logging.info(f'Training started ::')
+    def train_all_models(self, embedding_model):
+        logging.info(f'Training started with {embedding_model} Embedding')
+        self.preprocess_data('data/pandora_to_big5.csv', 'data/LIWC_pandora_to_big5_oct_24.csv', False, embedding_model)
         for target_cols in ['cOPN', 'cCON', 'cEXT', 'cAGR', 'cNEU']:
             logging.info(f'Trait: {target_cols}')
-            self.prepare_dataset(embedding_type, target_cols)
+            self.prepare_dataset(target_cols)
             self.init_models()
             self.fit_validate_and_generate_acc_scr()
+            logging.info(50*'=')
 
-
-my_train = My_training_class(dff)
-my_train.train_all_models(None)
-my_train.train_all_models('berttweet_embeddings')
-my_train.train_all_models('roberta_embeddings')
-
+my_train = My_training_class()
+# my_train.train_all_models(None)
+# my_train.train_all_models('bert-base-uncased')
+my_train.train_all_models('roberta-base')
+# my_train.train_all_models('vinai/bertweet-base')
+# my_train.train_all_models('xlnet-base-cased')
