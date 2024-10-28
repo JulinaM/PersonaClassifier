@@ -5,6 +5,8 @@ import re,os, glob, traceback, nltk
 from collections import defaultdict
 import torch.optim as optim
 import torch.nn as nn
+from transformers import AutoTokenizer, AutoModel
+import torch
 from sklearn.svm import SVC
 from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import RandomForestClassifier
@@ -106,7 +108,6 @@ def process_VADER_sentiment(df):
         return sc
     df[['sent_score']] = df['STATUS'].apply(lambda x: pd.Series(find_sentiment(x)))
     logging.info(f'VADER shape={df.shape}')
-    logging.info(40*'-')
     return df
 
 def process_embeddings(df, model_name, batch_size=8):
@@ -226,15 +227,18 @@ def train_val_dl_models(model, train_loader, val_loader, max_grad_norm=1.0, epoc
 class My_training_class:
     # def __init__(self,  ):
 
-    def preprocess_data(self, main_file, liwc_file, is_mypersonality=True, embedding_model=None):
+    def preprocess_data(self, main_file, liwc_file, is_mypersonality=True, embedding_model=None, demo=False):
         self.df = read_data(main_file, liwc_file, is_mypersonality)
+        if demo:
+            self.df = self.df[:2000]
+            logging.info(5*' Dr. Julina Maharjan ')
+
         self.df = process_NRC_emotion(self.df)
-        self.df = process_VAD_emotion(self.df)
-        self.df = self.df[:3000]
+        self.df = process_NRC_VAD(self.df)
+        self.df = process_VADER_sentiment(self.df)
         self.contextual_embeddings = process_embeddings(self.df, embedding_model) if embedding_model else None
         self.df.fillna(value=0, inplace=True)
         logging.info(f'Preprocessing Completed. Total shape={self.df.shape}')
-        logging.info(40*'-')
 
     def prepare_dataset(self, target_col):
         all_cols = self.df.columns
@@ -247,8 +251,9 @@ class My_training_class:
     
         X = np.concatenate([stat_features_scaled, self.contextual_embeddings] if self.contextual_embeddings is not None else [stat_features_scaled], axis=1)
         y = np.array(self.df[[target_col]]) 
+        y = y.squeeze() if y.ndim > 1 else y
+
         self.X_train, self.X_val, self.y_train, self.y_val = train_test_split(X, y, test_size=0.1, random_state=42)
-        self.input_dim = self.X_train.shape[1]
         # X_test, X_val, y_test, y_val = train_test_split(X_val, y_val, test_size=0.5, random_state=42)
         # logging.info(f'Train  size: {X_train.shape}, Val size: {X_val.shape}, Test  size: {X_test.shape}')
         X_train_tensor = torch.tensor(self.X_train, dtype=torch.float32)
@@ -259,18 +264,19 @@ class My_training_class:
         val_dataset = TensorDataset(X_val_tensor, y_val_tensor)
         self.train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
         self.val_loader = DataLoader(val_dataset, batch_size=32, shuffle=False)
-        logging.info(40*'-')
+        logging.info(f'Data Preparation Completed.')
 
     def init_models(self):
         self.svm_model = SVC(kernel='linear')
         self.lr_model = LogisticRegression(solver='lbfgs', max_iter=1000)
         self.rf_model = RandomForestClassifier(n_estimators=100, random_state=42)
         self.xgb_model = xgb.XGBClassifier(n_estimators=100, learning_rate=0.1, max_depth=6, random_state=42)
-        self.bilstm_model = BiLSTMClassifier(input_dim=self.input_dim, hidden_dim=128, output_dim=1, num_layers=2, bidirectional=True, do_attention=True, dropout_rate=0.5)
-        self.mlp_model = MLP(input_size=self.input_dim, hidden_size=128, output_size=1, dropout_rate=0.3)
-        logging.info(40*'-')
+        self.bilstm_model = BiLSTMClassifier(input_dim=self.X_train.shape[1], hidden_dim=128, output_dim=1, num_layers=2, bidirectional=True, do_attention=True, dropout_rate=0.5)
+        self.mlp_model = MLP(input_size=self.X_train.shape[1], hidden_size=128, output_size=1, dropout_rate=0.3)
+        logging.info(f'Model Initiated.')
     
     def fit_validate_and_generate_acc_scr(self):
+        logging.info(f'Fitting and Validating Models...')
         self.svm_model.fit(self.X_train, self.y_train)
         self.lr_model.fit(self.X_train, self.y_train)
         self.rf_model.fit(self.X_train, self.y_train)
@@ -286,13 +292,14 @@ class My_training_class:
         lr_accuracy = accuracy_score(self.y_val, lr_y_pred)
         rf_accuracy = accuracy_score(self.y_val, rf_y_pred)
         xgb_accuracy = accuracy_score(self.y_val, xgb_y_pred)
+        logging.info(20*'=')
         logging.info(f'SVM Val Acc: {svm_accuracy:.2f}')
         logging.info(f'LR Val Acc: {lr_accuracy:.2f}')
         logging.info(f'RF Val Acc: {rf_accuracy:.2f}')
         logging.info(f'SGBoost Val Acc: {xgb_accuracy:.2f}')
         logging.info(f'MLP Val Acc: {mlp_acc:.2f}')
         logging.info(f'BiLSTM Val Acc: {bilstm_acc:.2f}')
-        logging.info(40*'-')
+        logging.info(20*'=')
 
     # def test_model():
     #     model.eval()
@@ -310,19 +317,22 @@ class My_training_class:
             # Print metrics
             # print(f"Accuracy: {accuracy:.4f}, Precision: {precision:.4f}, Recall: {recall:.4f}, F1 Score: {f1:.4f}")
 
-    def train_all_models(self, embedding_model):
+    def train_all_models(self, embedding_model, demo=False):
         logging.info(f'Training started with {embedding_model} Embedding')
-        self.preprocess_data('data/pandora_to_big5.csv', 'data/LIWC_pandora_to_big5_oct_24.csv', False, embedding_model)
+        self.preprocess_data('data/pandora_to_big5.csv', 'data/LIWC_pandora_to_big5_oct_24.csv', False, embedding_model, demo)
+        logging.info(70*'>')
         for target_cols in ['cOPN', 'cCON', 'cEXT', 'cAGR', 'cNEU']:
+            logging.info(10*'-')
             logging.info(f'Trait: {target_cols}')
+            logging.info(10*'-')
             self.prepare_dataset(target_cols)
             self.init_models()
             self.fit_validate_and_generate_acc_scr()
-            logging.info(50*'=')
+            logging.info(70*'>')
 
 my_train = My_training_class()
-# my_train.train_all_models(None)
+my_train.train_all_models(None, False)
 # my_train.train_all_models('bert-base-uncased')
-my_train.train_all_models('roberta-base')
+# my_train.train_all_models('roberta-base', True)
 # my_train.train_all_models('vinai/bertweet-base')
 # my_train.train_all_models('xlnet-base-cased')
