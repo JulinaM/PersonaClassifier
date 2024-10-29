@@ -203,7 +203,7 @@ def train_val_dl_models(model, train_loader, val_loader, max_grad_norm=1.0, epoc
         for t, labels in train_loader:
             optimizer.zero_grad()  
             outputs= model(t)
-            loss = criterion(outputs, labels)
+            loss = criterion(outputs.squeeze(), labels)
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
             loss.backward()
             optimizer.step()
@@ -213,7 +213,7 @@ def train_val_dl_models(model, train_loader, val_loader, max_grad_norm=1.0, epoc
         with torch.no_grad():  
             for inputs, labels in val_loader:
                 outputs= model(inputs)
-                val_loss += criterion(outputs, labels).item()  
+                val_loss += criterion(outputs.squeeze(), labels).item()  
                 val_preds.append(torch.sigmoid(outputs))  
                 val_labels.append(labels) 
         val_preds = torch.cat(val_preds)
@@ -228,19 +228,22 @@ class My_training_class:
     # def __init__(self,  ):
 
     def preprocess_data(self, main_file, liwc_file, is_mypersonality=True, embedding_model=None, demo=False):
-        self.df = read_data(main_file, liwc_file, is_mypersonality)
-        if demo:
-            self.df = self.df[:2000]
-            logging.info(5*' Dr. Julina Maharjan ')
+        if self.df is not None:
+            self.df = read_data(main_file, liwc_file, is_mypersonality)
+            if demo:
+                self.df = self.df[:2000]
+                logging.info(5*' Dr. Julina Maharjan ')
 
-        self.df = process_NRC_emotion(self.df)
-        self.df = process_NRC_VAD(self.df)
-        self.df = process_VADER_sentiment(self.df)
-        self.contextual_embeddings = process_embeddings(self.df, embedding_model) if embedding_model else None
-        self.df.fillna(value=0, inplace=True)
-        logging.info(f'Preprocessing Completed. Total shape={self.df.shape}')
+            self.df = process_NRC_emotion(self.df)
+            self.df = process_NRC_VAD(self.df)
+            self.df = process_VADER_sentiment(self.df)
+            self.contextual_embeddings = process_embeddings(self.df, embedding_model) if embedding_model else None
+            self.df.fillna(value=0, inplace=True)
+            logging.info(f'Preprocessing Completed. Total shape={self.df.shape}')
+        else:
+            logging.info(f'Skipping Preprocessing. Total shape={self.df.shape}')
 
-    def prepare_dataset(self, target_col):
+    def prepare_dataset(self, target_col, test_size=0.1):
         all_cols = self.df.columns
         remove_cols = ['STATUS', 'cEXT','cNEU', 'cAGR', 'cCON', 'cOPN']
         emb_cols = ['bert_embeddings', 'berttweet_embeddings', 'xlnet_embeddings', 'roberta_embeddings']
@@ -251,11 +254,15 @@ class My_training_class:
     
         X = np.concatenate([stat_features_scaled, self.contextual_embeddings] if self.contextual_embeddings is not None else [stat_features_scaled], axis=1)
         y = np.array(self.df[[target_col]]) 
-        y = y.squeeze() if y.ndim > 1 else y
 
-        self.X_train, self.X_val, self.y_train, self.y_val = train_test_split(X, y, test_size=0.1, random_state=42)
+        print("Type of y:", type(y))
+        print("Shape of y:", y.shape)
+        y = y.ravel()  # This will reshape y to (n_samples,)
+        print("After Shape of y:", y.shape)
+
+        self.X_train, self.X_val, self.y_train, self.y_val = train_test_split(X, y, test_size=test_size, random_state=42)
         # X_test, X_val, y_test, y_val = train_test_split(X_val, y_val, test_size=0.5, random_state=42)
-        # logging.info(f'Train  size: {X_train.shape}, Val size: {X_val.shape}, Test  size: {X_test.shape}')
+        logging.info(f'Test size: {test_size}, Train  size: {self.X_train.shape}, Val size: {self.X_val.shape}')
         X_train_tensor = torch.tensor(self.X_train, dtype=torch.float32)
         y_train_tensor = torch.tensor(self.y_train, dtype=torch.float32)
         X_val_tensor = torch.tensor(self.X_val, dtype=torch.float32)
@@ -267,38 +274,39 @@ class My_training_class:
         logging.info(f'Data Preparation Completed.')
 
     def init_models(self):
-        self.svm_model = SVC(kernel='linear')
-        self.lr_model = LogisticRegression(solver='lbfgs', max_iter=1000)
+        # self.svm_model = SVC(kernel='linear')
+        # self.lr_model = LogisticRegression(solver='lbfgs', max_iter=1000)
+        self.lr_model = LogisticRegression(solver='saga', max_iter=1000)
         self.rf_model = RandomForestClassifier(n_estimators=100, random_state=42)
         self.xgb_model = xgb.XGBClassifier(n_estimators=100, learning_rate=0.1, max_depth=6, random_state=42)
-        self.bilstm_model = BiLSTMClassifier(input_dim=self.X_train.shape[1], hidden_dim=128, output_dim=1, num_layers=2, bidirectional=True, do_attention=True, dropout_rate=0.5)
+        # self.bilstm_model = BiLSTMClassifier(input_dim=self.X_train.shape[1], hidden_dim=128, output_dim=1, num_layers=2, bidirectional=True, do_attention=True, dropout_rate=0.5)
         self.mlp_model = MLP(input_size=self.X_train.shape[1], hidden_size=128, output_size=1, dropout_rate=0.3)
         logging.info(f'Model Initiated.')
     
     def fit_validate_and_generate_acc_scr(self):
         logging.info(f'Fitting and Validating Models...')
-        self.svm_model.fit(self.X_train, self.y_train)
+        # self.svm_model.fit(self.X_train, self.y_train)
         self.lr_model.fit(self.X_train, self.y_train)
         self.rf_model.fit(self.X_train, self.y_train)
         self.xgb_model.fit(self.X_train, self.y_train)
         mlp_acc = train_val_dl_models(self.mlp_model, self.train_loader, self.val_loader)
-        bilstm_acc = train_val_dl_models(self.bilstm_model, self.train_loader, self.val_loader)
+        # # bilstm_acc = train_val_dl_models(self.bilstm_model, self.train_loader, self.val_loader)
 
-        svm_y_pred = self.svm_model.predict(self.X_val)
+        # svm_y_pred = self.svm_model.predict(self.X_val)
         lr_y_pred = self.lr_model.predict(self.X_val)
         rf_y_pred = self.rf_model.predict(self.X_val)
         xgb_y_pred = self.xgb_model.predict(self.X_val)
-        svm_accuracy = accuracy_score(self.y_val, svm_y_pred)
+        # svm_accuracy = accuracy_score(self.y_val, svm_y_pred)
         lr_accuracy = accuracy_score(self.y_val, lr_y_pred)
         rf_accuracy = accuracy_score(self.y_val, rf_y_pred)
         xgb_accuracy = accuracy_score(self.y_val, xgb_y_pred)
         logging.info(20*'=')
-        logging.info(f'SVM Val Acc: {svm_accuracy:.2f}')
+        # logging.info(f'SVM Val Acc: {svm_accuracy:.2f}')
         logging.info(f'LR Val Acc: {lr_accuracy:.2f}')
         logging.info(f'RF Val Acc: {rf_accuracy:.2f}')
         logging.info(f'SGBoost Val Acc: {xgb_accuracy:.2f}')
         logging.info(f'MLP Val Acc: {mlp_acc:.2f}')
-        logging.info(f'BiLSTM Val Acc: {bilstm_acc:.2f}')
+        # logging.info(f'BiLSTM Val Acc: {bilstm_acc:.2f}')
         logging.info(20*'=')
 
     # def test_model():
@@ -318,21 +326,21 @@ class My_training_class:
             # print(f"Accuracy: {accuracy:.4f}, Precision: {precision:.4f}, Recall: {recall:.4f}, F1 Score: {f1:.4f}")
 
     def train_all_models(self, embedding_model, demo=False):
-        logging.info(f'Training started with {embedding_model} Embedding')
+        logging.info(f'Training started with {embedding_model} Embedding') #TODO preprocess only one time
         self.preprocess_data('data/pandora_to_big5.csv', 'data/LIWC_pandora_to_big5_oct_24.csv', False, embedding_model, demo)
         logging.info(70*'>')
         for target_cols in ['cOPN', 'cCON', 'cEXT', 'cAGR', 'cNEU']:
             logging.info(10*'-')
             logging.info(f'Trait: {target_cols}')
             logging.info(10*'-')
-            self.prepare_dataset(target_cols)
+            self.prepare_dataset(target_cols, test_size=0.1)
             self.init_models()
             self.fit_validate_and_generate_acc_scr()
             logging.info(70*'>')
 
 my_train = My_training_class()
-my_train.train_all_models(None, False)
-# my_train.train_all_models('bert-base-uncased')
-# my_train.train_all_models('roberta-base', True)
-# my_train.train_all_models('vinai/bertweet-base')
-# my_train.train_all_models('xlnet-base-cased')
+# my_train.train_all_models(None, False)
+my_train.train_all_models('bert-base-uncased', False)
+# my_train.train_all_models('roberta-base', False)
+my_train.train_all_models('vinai/bertweet-base', False)
+my_train.train_all_models('xlnet-base-cased', False)
