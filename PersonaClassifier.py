@@ -193,7 +193,7 @@ class BiLSTMClassifier(nn.Module):
 # output= model(input_data)
 # print(output.shape)  # Expected output: (batch_size, output_dim)
 
-def train_val_dl_models(model, train_loader, val_loader, max_grad_norm=1.0, epochs=16, lr=0.001):
+def train_val_dl_models(model, train_loader, val_loader, target_col, max_grad_norm=1.0, epochs=16, lr=0.001):
     logging.info(f'{model.__class__.__name__}')
     criterion = nn.BCEWithLogitsLoss()  
     optimizer = optim.Adam(model.parameters(), lr=lr)
@@ -222,21 +222,29 @@ def train_val_dl_models(model, train_loader, val_loader, max_grad_norm=1.0, epoc
         val_accuracy = accuracy_score(val_labels.numpy(), val_preds.numpy())
         if epoch % 4 == 0:
             logging.info(f'Epoch [{epoch + 1}/{epochs}], Train Loss: {total_loss / len(train_loader):.4f}, 'f'Val Loss: {val_loss / len(val_loader):.4f}, Val Accuracy: {val_accuracy:.4f}')
+    ckpt = f"checkpoint/{timestamp}"
+    if not os.path.exists(ckpt):
+        os.makedirs(ckpt)
+    torch.save(model.state_dict(), f"{ckpt}/{model.__class__.__name__}_{target_col}.pth")
     return val_accuracy
 
 class My_training_class:
-    # def __init__(self,  ):
+    def __init__(self ):
+        self.df = None
 
-    def preprocess_data(self, main_file, liwc_file, is_mypersonality=True, embedding_model=None, demo=False):
-        if self.df is not None:
-            self.df = read_data(main_file, liwc_file, is_mypersonality)
+    def preprocess_data(self, main_file, liwc_file, is_mypersonality=True, is_preprocessed=False, embedding_model=None, demo=False):
+        if self.df is None:
+            if not is_preprocessed:
+                self.df = read_data(main_file, liwc_file, is_mypersonality)
+                self.df = process_NRC_emotion(self.df)
+                self.df = process_NRC_VAD(self.df)
+                self.df = process_VADER_sentiment(self.df)
+            else:
+                self.df = pd.read_csv(main_file)
+                logging.info(10*' Dr. Julina Maharjan ')
             if demo:
                 self.df = self.df[:2000]
-                logging.info(5*' Dr. Julina Maharjan ')
-
-            self.df = process_NRC_emotion(self.df)
-            self.df = process_NRC_VAD(self.df)
-            self.df = process_VADER_sentiment(self.df)
+                logging.info(5*' DEMO ')
             self.contextual_embeddings = process_embeddings(self.df, embedding_model) if embedding_model else None
             self.df.fillna(value=0, inplace=True)
             logging.info(f'Preprocessing Completed. Total shape={self.df.shape}')
@@ -273,38 +281,38 @@ class My_training_class:
         self.val_loader = DataLoader(val_dataset, batch_size=32, shuffle=False)
         logging.info(f'Data Preparation Completed.')
 
-    def init_models(self):
+    def init_models(self, target_col):
         # self.svm_model = SVC(kernel='linear')
         # self.lr_model = LogisticRegression(solver='lbfgs', max_iter=1000)
-        self.lr_model = LogisticRegression(solver='saga', max_iter=1000)
-        self.rf_model = RandomForestClassifier(n_estimators=100, random_state=42)
-        self.xgb_model = xgb.XGBClassifier(n_estimators=100, learning_rate=0.1, max_depth=6, random_state=42)
+        # self.lr_model = LogisticRegression(solver='saga', max_iter=1000)
+        # self.rf_model = RandomForestClassifier(n_estimators=100, random_state=42)
+        # self.xgb_model = xgb.XGBClassifier(n_estimators=100, learning_rate=0.1, max_depth=6, random_state=42)
         # self.bilstm_model = BiLSTMClassifier(input_dim=self.X_train.shape[1], hidden_dim=128, output_dim=1, num_layers=2, bidirectional=True, do_attention=True, dropout_rate=0.5)
         self.mlp_model = MLP(input_size=self.X_train.shape[1], hidden_size=128, output_size=1, dropout_rate=0.3)
         logging.info(f'Model Initiated.')
     
-    def fit_validate_and_generate_acc_scr(self):
+    def fit_validate_and_generate_acc_scr(self, target_col):
         logging.info(f'Fitting and Validating Models...')
         # self.svm_model.fit(self.X_train, self.y_train)
-        self.lr_model.fit(self.X_train, self.y_train)
-        self.rf_model.fit(self.X_train, self.y_train)
-        self.xgb_model.fit(self.X_train, self.y_train)
-        mlp_acc = train_val_dl_models(self.mlp_model, self.train_loader, self.val_loader)
+        # self.lr_model.fit(self.X_train, self.y_train)
+        # self.rf_model.fit(self.X_train, self.y_train)
+        # self.xgb_model.fit(self.X_train, self.y_train)
+        mlp_acc = train_val_dl_models(self.mlp_model, self.train_loader, self.val_loader, target_col)
         # # bilstm_acc = train_val_dl_models(self.bilstm_model, self.train_loader, self.val_loader)
 
         # svm_y_pred = self.svm_model.predict(self.X_val)
-        lr_y_pred = self.lr_model.predict(self.X_val)
-        rf_y_pred = self.rf_model.predict(self.X_val)
-        xgb_y_pred = self.xgb_model.predict(self.X_val)
+        # lr_y_pred = self.lr_model.predict(self.X_val)
+        # rf_y_pred = self.rf_model.predict(self.X_val)
+        # xgb_y_pred = self.xgb_model.predict(self.X_val)
         # svm_accuracy = accuracy_score(self.y_val, svm_y_pred)
-        lr_accuracy = accuracy_score(self.y_val, lr_y_pred)
-        rf_accuracy = accuracy_score(self.y_val, rf_y_pred)
-        xgb_accuracy = accuracy_score(self.y_val, xgb_y_pred)
+        # lr_accuracy = accuracy_score(self.y_val, lr_y_pred)
+        # rf_accuracy = accuracy_score(self.y_val, rf_y_pred)
+        # xgb_accuracy = accuracy_score(self.y_val, xgb_y_pred)
         logging.info(20*'=')
         # logging.info(f'SVM Val Acc: {svm_accuracy:.2f}')
-        logging.info(f'LR Val Acc: {lr_accuracy:.2f}')
-        logging.info(f'RF Val Acc: {rf_accuracy:.2f}')
-        logging.info(f'SGBoost Val Acc: {xgb_accuracy:.2f}')
+        # logging.info(f'LR Val Acc: {lr_accuracy:.2f}')
+        # logging.info(f'RF Val Acc: {rf_accuracy:.2f}')
+        # logging.info(f'SGBoost Val Acc: {xgb_accuracy:.2f}')
         logging.info(f'MLP Val Acc: {mlp_acc:.2f}')
         # logging.info(f'BiLSTM Val Acc: {bilstm_acc:.2f}')
         logging.info(20*'=')
@@ -327,20 +335,31 @@ class My_training_class:
 
     def train_all_models(self, embedding_model, demo=False):
         logging.info(f'Training started with {embedding_model} Embedding') #TODO preprocess only one time
-        self.preprocess_data('data/pandora_to_big5.csv', 'data/LIWC_pandora_to_big5_oct_24.csv', False, embedding_model, demo)
+        self.preprocess_data('data/pandora_processed_train.csv', None, False, True, embedding_model, demo)
+        # self.preprocess_data('data/mypersonality.csv', 'data/LIWC_mypersonality_oct_2.csv', True, embedding_model, demo)
         logging.info(70*'>')
-        for target_cols in ['cOPN', 'cCON', 'cEXT', 'cAGR', 'cNEU']:
+        for target_col in ['cOPN', 'cCON', 'cEXT', 'cAGR', 'cNEU']:
             logging.info(10*'-')
-            logging.info(f'Trait: {target_cols}')
+            logging.info(f'Trait: {target_col}')
             logging.info(10*'-')
-            self.prepare_dataset(target_cols, test_size=0.1)
-            self.init_models()
-            self.fit_validate_and_generate_acc_scr()
+            self.prepare_dataset(target_col, test_size=0.1)
+            self.init_models(target_col)
+            self.fit_validate_and_generate_acc_scr(target_col)
             logging.info(70*'>')
 
-my_train = My_training_class()
-# my_train.train_all_models(None, False)
-my_train.train_all_models('bert-base-uncased', False)
-# my_train.train_all_models('roberta-base', False)
-my_train.train_all_models('vinai/bertweet-base', False)
-my_train.train_all_models('xlnet-base-cased', False)
+if __name__ == "__main__":
+    try:
+        demo = sys.argv[1]
+        print(demo)
+        my_train = My_training_class()
+        # my_train.train_all_models(None, False)
+        # my_train.train_all_models('bert-base-uncased', False)
+        my_train.train_all_models('roberta-base', demo)
+        # my_train.train_all_models('vinai/bertweet-base', False)
+        # my_train.train_all_models('xlnet-base-cased', False)
+    except:
+        traceback.print_exc()
+        print("missing arguments!!!!")
+        exit(0)  
+        
+
