@@ -18,7 +18,10 @@ from sklearn.metrics import accuracy_score
 import logging, sys
 from datetime import datetime
 timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
-logging.basicConfig(filename=f'log/log_{timestamp}.log', level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+ckpt = f"checkpoint/{timestamp}"
+if not os.path.exists(ckpt):
+    os.makedirs(ckpt)
+logging.basicConfig(filename=f'{ckpt}/log_{timestamp}.log', level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 def read_data(main_file, liwc_file, is_mypersonality=True):
     if is_mypersonality:
@@ -222,15 +225,13 @@ def train_val_dl_models(model, train_loader, val_loader, target_col, max_grad_no
         val_accuracy = accuracy_score(val_labels.numpy(), val_preds.numpy())
         if epoch % 4 == 0:
             logging.info(f'Epoch [{epoch + 1}/{epochs}], Train Loss: {total_loss / len(train_loader):.4f}, 'f'Val Loss: {val_loss / len(val_loader):.4f}, Val Accuracy: {val_accuracy:.4f}')
-    ckpt = f"checkpoint/{timestamp}"
-    if not os.path.exists(ckpt):
-        os.makedirs(ckpt)
-    torch.save(model.state_dict(), f"{ckpt}/{model.__class__.__name__}_{target_col}.pth")
     return val_accuracy
 
 class My_training_class:
-    def __init__(self ):
+    def __init__(self,  model_list=['svm', 'lr', 'rf', 'xgb', 'bilstm', 'mlp'], embedding_model=None):
         self.df = None
+        self.models = model_list
+        self.embedding_model = embedding_model
 
     def preprocess_data(self, main_file, liwc_file, is_mypersonality=True, is_preprocessed=False, embedding_model=None, demo=False):
         if self.df is None:
@@ -247,6 +248,7 @@ class My_training_class:
                 logging.info(5*' DEMO ')
             self.contextual_embeddings = process_embeddings(self.df, embedding_model) if embedding_model else None
             self.df.fillna(value=0, inplace=True)
+            self.df = self.df.loc[:, ~self.df.columns.str.contains('^Unnamed:')]
             logging.info(f'Preprocessing Completed. Total shape={self.df.shape}')
         else:
             logging.info(f'Skipping Preprocessing. Total shape={self.df.shape}')
@@ -281,61 +283,77 @@ class My_training_class:
         self.val_loader = DataLoader(val_dataset, batch_size=32, shuffle=False)
         logging.info(f'Data Preparation Completed.')
 
-    def init_models(self, target_col):
-        # self.svm_model = SVC(kernel='linear')
-        # self.lr_model = LogisticRegression(solver='lbfgs', max_iter=1000)
-        # self.lr_model = LogisticRegression(solver='saga', max_iter=1000)
-        # self.rf_model = RandomForestClassifier(n_estimators=100, random_state=42)
-        # self.xgb_model = xgb.XGBClassifier(n_estimators=100, learning_rate=0.1, max_depth=6, random_state=42)
-        # self.bilstm_model = BiLSTMClassifier(input_dim=self.X_train.shape[1], hidden_dim=128, output_dim=1, num_layers=2, bidirectional=True, do_attention=True, dropout_rate=0.5)
-        self.mlp_model = MLP(input_size=self.X_train.shape[1], hidden_size=128, output_size=1, dropout_rate=0.3)
+    def init_models(self):
+        for model in self.models:
+            if model =='svm':
+                self.svm_model = SVC(kernel='linear')
+            elif model == 'lr':
+                self.lr_model = LogisticRegression(solver='lbfgs', max_iter=1000)
+                # self.lr_model = LogisticRegression(solver='saga', max_iter=1000)
+            elif model == 'rf':
+                self.rf_model = RandomForestClassifier(n_estimators=100, random_state=42)
+            elif model == 'xgb':
+                self.xgb_model = xgb.XGBClassifier(n_estimators=100, learning_rate=0.1, max_depth=6, random_state=42)
+            elif model == 'bilstm':   
+                self.bilstm_model = BiLSTMClassifier(input_dim=self.X_train.shape[1], hidden_dim=128, output_dim=1, num_layers=2,bidirectional=True, do_attention=True, dropout_rate=0.5)
+            elif model == 'mlp':  
+                self.mlp_model = MLP(input_size=self.X_train.shape[1], hidden_size=128, output_size=1, dropout_rate=0.3)
         logging.info(f'Model Initiated.')
     
-    def fit_validate_and_generate_acc_scr(self, target_col):
-        logging.info(f'Fitting and Validating Models...')
-        # self.svm_model.fit(self.X_train, self.y_train)
-        # self.lr_model.fit(self.X_train, self.y_train)
-        # self.rf_model.fit(self.X_train, self.y_train)
-        # self.xgb_model.fit(self.X_train, self.y_train)
-        mlp_acc = train_val_dl_models(self.mlp_model, self.train_loader, self.val_loader, target_col)
-        # # bilstm_acc = train_val_dl_models(self.bilstm_model, self.train_loader, self.val_loader)
+    def fit_and_save_models(self, target_col):
+        logging.info(f'Fitting and Saving Models...')
+        for model in self.models:
+            if model =='svm':
+                self.svm_model.fit(self.X_train, self.y_train)
+                self.svm_model.save_model(f"{ckpt}/{self.svm_model.__class__.__name__}_{target_col}.json")
+            elif model == 'lr':
+                self.lr_model.fit(self.X_train, self.y_train)
+                self.lr_model.save_model(f"{ckpt}/{self.lr_model.__class__.__name__}_{target_col}.json")
+            elif model == 'rf':
+                self.rf_model.fit(self.X_train, self.y_train)
+                self.rf_model.save_model(f"{ckpt}/{self.rf_model.__class__.__name__}_{target_col}.json")
+            elif model == 'xgb': 
+                self.xgb_model.fit(self.X_train, self.y_train)
+                self.xgb_model.save_model(f"{ckpt}/{self.xgb_model.__class__.__name__}_{target_col}.json")
+            elif model == 'bilstm':   
+                self.bilstm_acc = train_val_dl_models(self.bilstm_model, self.train_loader, self.val_loader)
+                torch.save(self.bilstm_model.state_dict(), f"{ckpt}/{self.bilstm_model.__class__.__name__}_{target_col}.pth")
+            elif model == 'mlp':  
+                self.mlp_acc = train_val_dl_models(self.mlp_model, self.train_loader, self.val_loader, target_col)
+                torch.save(self.mlp_model.state_dict(), f"{ckpt}/{self.mlp_model.__class__.__name__}_{target_col}.pth")
 
-        # svm_y_pred = self.svm_model.predict(self.X_val)
-        # lr_y_pred = self.lr_model.predict(self.X_val)
-        # rf_y_pred = self.rf_model.predict(self.X_val)
-        # xgb_y_pred = self.xgb_model.predict(self.X_val)
-        # svm_accuracy = accuracy_score(self.y_val, svm_y_pred)
-        # lr_accuracy = accuracy_score(self.y_val, lr_y_pred)
-        # rf_accuracy = accuracy_score(self.y_val, rf_y_pred)
-        # xgb_accuracy = accuracy_score(self.y_val, xgb_y_pred)
+
+    def validate_and_generate_acc_scr(self, target_col):
+        logging.info(f'Validating Models...')
         logging.info(20*'=')
-        # logging.info(f'SVM Val Acc: {svm_accuracy:.2f}')
-        # logging.info(f'LR Val Acc: {lr_accuracy:.2f}')
-        # logging.info(f'RF Val Acc: {rf_accuracy:.2f}')
-        # logging.info(f'SGBoost Val Acc: {xgb_accuracy:.2f}')
-        logging.info(f'MLP Val Acc: {mlp_acc:.2f}')
-        # logging.info(f'BiLSTM Val Acc: {bilstm_acc:.2f}')
+        for model in self.models:
+            if model =='svm':
+                svm_y_pred = self.svm_model.predict(self.X_val)
+                svm_accuracy = accuracy_score(self.y_val, svm_y_pred)
+                logging.info(f'SVM Val Acc: {svm_accuracy:.2f}')
+            elif model == 'lr':
+                lr_y_pred = self.lr_model.predict(self.X_val)
+                lr_accuracy = accuracy_score(self.y_val, lr_y_pred)
+                logging.info(f'LR Val Acc: {lr_accuracy:.2f}')
+            elif model == 'rf':
+                rf_y_pred = self.rf_model.predict(self.X_val)
+                rf_accuracy = accuracy_score(self.y_val, rf_y_pred)
+                logging.info(f'RF Val Acc: {rf_accuracy:.2f}')
+            elif model == 'xgb': 
+                xgb_y_pred = self.xgb_model.predict(self.X_val)
+                xgb_accuracy = accuracy_score(self.y_val, xgb_y_pred)
+                logging.info(f'SGBoost Val Acc: {xgb_accuracy:.2f}')
+            elif model == 'bilstm':   
+                # bilstm_acc = train_val_dl_models(self.bilstm_model, self.train_loader, self.val_loader)
+                logging.info(f'BiLSTM Val Acc: {self.bilstm_acc:.2f}')
+            elif model == 'mlp':  
+                # mlp_acc = train_val_dl_models(self.mlp_model, self.train_loader, self.val_loader, target_col)
+                logging.info(f'MLP Val Acc: { self.mlp_acc:.2f}') 
         logging.info(20*'=')
 
-    # def test_model():
-    #     model.eval()
-    #     X_test_tensor = torch.tensor(X_test, dtype=torch.float32)
-    #     with torch.no_grad():  
-    #         outputs = model(X_test_tensor)
-    #     outputs = torch.sigmoid(outputs)
-    #     preds = (outputs > 0.5).float()
-    #     preds_np = preds.numpy()
-    #     y_test_np = y_test  # If y_test is already in numpy format, otherwise y_test.numpy()
-    #     accuracy = accuracy_score(y_test_np, preds_np)
-    #     precision = precision_score(y_test_np, preds_np)
-    #     recall = recall_score(y_test_np, preds_np)
-    #     f1 = f1_score(y_test_np, preds_np)
-            # Print metrics
-            # print(f"Accuracy: {accuracy:.4f}, Precision: {precision:.4f}, Recall: {recall:.4f}, F1 Score: {f1:.4f}")
-
-    def train_all_models(self, embedding_model, demo=False):
-        logging.info(f'Training started with {embedding_model} Embedding') #TODO preprocess only one time
-        self.preprocess_data('data/pandora_processed_train.csv', None, False, True, embedding_model, demo)
+    def begin_training(self, demo=False):
+        logging.info(f'Training started with {self.embedding_model} Embedding') #TODO preprocess only one time
+        self.preprocess_data('data/pandora_processed_train.csv', None, False, True, self.embedding_model, demo)
         # self.preprocess_data('data/mypersonality.csv', 'data/LIWC_mypersonality_oct_2.csv', True, embedding_model, demo)
         logging.info(70*'>')
         for target_col in ['cOPN', 'cCON', 'cEXT', 'cAGR', 'cNEU']:
@@ -343,20 +361,23 @@ class My_training_class:
             logging.info(f'Trait: {target_col}')
             logging.info(10*'-')
             self.prepare_dataset(target_col, test_size=0.1)
-            self.init_models(target_col)
-            self.fit_validate_and_generate_acc_scr(target_col)
+            self.init_models()
+            self.fit_and_save_models(target_col)
+            self.validate_and_generate_acc_scr(target_col)
             logging.info(70*'>')
 
 if __name__ == "__main__":
     try:
         demo = sys.argv[1]
         print(demo)
-        my_train = My_training_class()
-        # my_train.train_all_models(None, False)
-        # my_train.train_all_models('bert-base-uncased', False)
-        my_train.train_all_models('roberta-base', demo)
-        # my_train.train_all_models('vinai/bertweet-base', False)
-        # my_train.train_all_models('xlnet-base-cased', False)
+        my_train = My_training_class(model_list=['xgb', 'mlp'], embedding_model='roberta-base')
+        my_train.begin_training(demo)
+        # my_train_bert = My_training_class(model_list=['xgb', 'mlp'], embedding_model='bert-base-uncased')
+        # my_train_bert.begin_training(demo)
+        # train_bert_tweet = My_training_class(model_list=['xgb', 'mlp'], embedding_model='vinai/bertweet-base')
+        # train_bert_tweet.begin_training(demo)
+        # my_train_xlnet = My_training_class(model_list=['xgb', 'mlp'], embedding_model='xlnet-base-cased')
+        # my_train_xlnet.begin_training(demo)
     except:
         traceback.print_exc()
         print("missing arguments!!!!")
