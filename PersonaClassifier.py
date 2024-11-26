@@ -228,12 +228,13 @@ def train_val_dl_models(model, train_loader, val_loader, target_col, max_grad_no
     return val_accuracy
 
 class My_training_class:
-    def __init__(self,  model_list=['svm', 'lr', 'rf', 'xgb', 'bilstm', 'mlp'], embedding_model=None):
+    def __init__(self,  model_list=['svm', 'lr', 'rf', 'xgb', 'bilstm', 'mlp'], embedding_model=None, demo=False):
         self.df = None
         self.models = model_list
         self.embedding_model = embedding_model
+        self.demo = True if demo == 'true' or demo == "True" or demo is True else False
 
-    def preprocess_data(self, main_file, liwc_file, is_mypersonality=True, is_preprocessed=False, embedding_model=None, demo=False):
+    def preprocess_data(self, main_file, liwc_file, is_mypersonality=True, is_preprocessed=False):
         if self.df is None:
             if not is_preprocessed:
                 self.df = read_data(main_file, liwc_file, is_mypersonality)
@@ -243,10 +244,10 @@ class My_training_class:
             else:
                 self.df = pd.read_csv(main_file)
                 logging.info(10*' Dr. Julina Maharjan ')
-            if demo:
+            if self.demo:
                 self.df = self.df[:2000]
                 logging.info(5*' DEMO ')
-            self.contextual_embeddings = process_embeddings(self.df, embedding_model) if embedding_model else None
+            self.contextual_embeddings = process_embeddings(self.df, self.embedding_model) if self.embedding_model else None
             self.df.fillna(value=0, inplace=True)
             self.df = self.df.loc[:, ~self.df.columns.str.contains('^Unnamed:')]
             logging.info(f'Preprocessing Completed. Total shape={self.df.shape}')
@@ -255,7 +256,7 @@ class My_training_class:
 
     def prepare_dataset(self, target_col, test_size=0.1):
         all_cols = self.df.columns
-        remove_cols = ['STATUS', 'cEXT','cNEU', 'cAGR', 'cCON', 'cOPN']
+        remove_cols = ['STATUS', 'original', 'cEXT','cNEU', 'cAGR', 'cCON', 'cOPN']
         emb_cols = ['bert_embeddings', 'berttweet_embeddings', 'xlnet_embeddings', 'roberta_embeddings']
         stat_cols = list (set(all_cols) - set(remove_cols) - set(emb_cols))
         scaler = StandardScaler() 
@@ -264,11 +265,14 @@ class My_training_class:
     
         X = np.concatenate([stat_features_scaled, self.contextual_embeddings] if self.contextual_embeddings is not None else [stat_features_scaled], axis=1)
         y = np.array(self.df[[target_col]]) 
+        logging.info(f'statistical embedding: {stat_features_scaled.shape} ')
+        logging.info(f'contextual embedding: {self.contextual_embeddings.shape if self.contextual_embeddings is not None else  []} ')
+        logging.info(f'total embedding: {X.shape} ')
 
-        print("Type of y:", type(y))
-        print("Shape of y:", y.shape)
+        # print("Type of y:", type(y))
+        # print("Shape of y:", y.shape)
         y = y.ravel()  # This will reshape y to (n_samples,)
-        print("After Shape of y:", y.shape)
+        # print("After Shape of y:", y.shape)
 
         self.X_train, self.X_val, self.y_train, self.y_val = train_test_split(X, y, test_size=test_size, random_state=42)
         # X_test, X_val, y_test, y_val = train_test_split(X_val, y_val, test_size=0.5, random_state=42)
@@ -351,10 +355,10 @@ class My_training_class:
                 logging.info(f'MLP Val Acc: { self.mlp_acc:.2f}') 
         logging.info(20*'=')
 
-    def begin_training(self, demo=False):
-        logging.info(f'Training started with {self.embedding_model} Embedding') #TODO preprocess only one time
-        self.preprocess_data('data/pandora_processed_train.csv', None, False, True, self.embedding_model, demo)
-        # self.preprocess_data('data/mypersonality.csv', 'data/LIWC_mypersonality_oct_2.csv', True, embedding_model, demo)
+    def begin_training(self):
+        logging.info(f'Training started with {self.embedding_model} Embedding for {self.models}') #TODO preprocess only one time
+        self.preprocess_data('data/pandora_processed_train_nov26.csv', None, False, True)
+        # self.preprocess_data('data/mypersonality.csv', 'data/LIWC_mypersonality_oct_2.csv', True)
         logging.info(70*'>')
         for target_col in ['cOPN', 'cCON', 'cEXT', 'cAGR', 'cNEU']:
             logging.info(10*'-')
@@ -368,10 +372,8 @@ class My_training_class:
 
 if __name__ == "__main__":
     try:
-        demo = sys.argv[1]
-        print(demo)
-        my_train = My_training_class(model_list=['xgb', 'mlp'], embedding_model='roberta-base')
-        my_train.begin_training(demo)
+        my_train = My_training_class(model_list=['mlp'], embedding_model='roberta-base', demo=sys.argv[1])
+        my_train.begin_training()
         # my_train_bert = My_training_class(model_list=['xgb', 'mlp'], embedding_model='bert-base-uncased')
         # my_train_bert.begin_training(demo)
         # train_bert_tweet = My_training_class(model_list=['xgb', 'mlp'], embedding_model='vinai/bertweet-base')
