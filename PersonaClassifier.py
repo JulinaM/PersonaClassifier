@@ -14,9 +14,10 @@ import xgboost as xgb
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader, TensorDataset
-from sklearn.metrics import accuracy_score
+from sklearn.metrics import accuracy_score, confusion_matrix, ConfusionMatrixDisplay
 import logging, sys
 from datetime import datetime
+
 timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
 ckpt = f"checkpoint/{timestamp}"
 if not os.path.exists(ckpt):
@@ -196,7 +197,7 @@ class BiLSTMClassifier(nn.Module):
 # output= model(input_data)
 # print(output.shape)  # Expected output: (batch_size, output_dim)
 
-def train_val_dl_models(model, train_loader, val_loader, target_col, max_grad_norm=1.0, epochs=16, lr=0.001):
+def train_val_dl_models(model, train_loader, val_loader, max_grad_norm=1.0, epochs=16, lr=0.001):
     logging.info(f'{model.__class__.__name__}')
     criterion = nn.BCEWithLogitsLoss()  
     optimizer = optim.Adam(model.parameters(), lr=lr)
@@ -225,7 +226,19 @@ def train_val_dl_models(model, train_loader, val_loader, target_col, max_grad_no
         val_accuracy = accuracy_score(val_labels.numpy(), val_preds.numpy())
         if epoch % 4 == 0:
             logging.info(f'Epoch [{epoch + 1}/{epochs}], Train Loss: {total_loss / len(train_loader):.4f}, 'f'Val Loss: {val_loss / len(val_loader):.4f}, Val Accuracy: {val_accuracy:.4f}')
-    return val_accuracy
+    return val_accuracy, val_labels, val_preds
+
+def plot_CM(true_and_predictions, filename):
+    n_classifiers = len(true_and_predictions)
+    fig, axes = plt.subplots(1, n_classifiers, figsize=(5 * n_classifiers, 5))
+    for ax, (name, (y_true, y_pred)) in zip(axes, true_and_predictions.items()):
+        cm = confusion_matrix(y_true, y_pred)
+        disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=["Class 0", "Class 1"])
+        disp.plot(cmap=plt.cm.Blues, ax=ax, colorbar=False)
+        ax.set_title(name)
+    plt.tight_layout()
+    plt.savefig(f"{ckpt}/cm_{filename}.png")
+    # plt.show()
 
 class My_training_class:
     def __init__(self,  model_list=['svm', 'lr', 'rf', 'xgb', 'bilstm', 'mlp'], embedding_model=None, demo=False):
@@ -233,8 +246,12 @@ class My_training_class:
         self.models = model_list
         self.embedding_model = embedding_model
         self.demo = True if demo == 'true' or demo == "True" or demo is True else False
+        self.true_and_predictions= {}
+        for model in model_list:
+            self.true_and_predictions[model] = {}
 
     def preprocess_data(self, main_file, liwc_file, is_mypersonality=True, is_preprocessed=False):
+        logging.info(f'Preprocessing {main_file}')
         if self.df is None:
             if not is_preprocessed:
                 self.df = read_data(main_file, liwc_file, is_mypersonality)
@@ -243,6 +260,21 @@ class My_training_class:
                 self.df = process_VADER_sentiment(self.df)
             else:
                 self.df = pd.read_csv(main_file)
+                logging.info(self.df.shape)
+                def preprocess_text(text):
+                    text = text.lower()
+                    text = re.sub(r'http\S+|www\S+|https\S+', '', text, flags=re.MULTILINE)
+                    text = re.sub(r'@\w+', '', text)
+                    text = re.sub(r'#', '', text)
+                    text = re.sub(r'\s+', ' ', text).strip()
+                    return text
+                # self.df['STATUS'] = self.df['STATUS'].apply(preprocess_text)
+                self.df= self.df.drop_duplicates(subset='STATUS', keep='first')
+                logging.info(f"After Dropping duplicate {self.df.shape}")
+                self.df['STATUS'] = self.df['STATUS'].astype(str).fillna('')
+                self.df = self.df[self.df['STATUS'].str.strip() != '']
+                self.df = self.df[self.df['STATUS'].str.split().str.len() >= 3]
+                logging.info(f"After Dropping less than 3 words {self.df.shape}")
                 logging.info(10*' Dr. Julina Maharjan ')
             if self.demo:
                 self.df = self.df[:2000]
@@ -309,23 +341,23 @@ class My_training_class:
         for model in self.models:
             if model =='svm':
                 self.svm_model.fit(self.X_train, self.y_train)
-                self.svm_model.save_model(f"{ckpt}/{self.svm_model.__class__.__name__}_{target_col}.json")
+                # self.svm_model.save_model(f"{ckpt}/{self.svm_model.__class__.__name__}_{target_col}.json")
             elif model == 'lr':
                 self.lr_model.fit(self.X_train, self.y_train)
-                self.lr_model.save_model(f"{ckpt}/{self.lr_model.__class__.__name__}_{target_col}.json")
+                # self.lr_model.save_model(f"{ckpt}/{self.lr_model.__class__.__name__}_{target_col}.json")
             elif model == 'rf':
                 self.rf_model.fit(self.X_train, self.y_train)
-                self.rf_model.save_model(f"{ckpt}/{self.rf_model.__class__.__name__}_{target_col}.json")
+                # self.rf_model.save_model(f"{ckpt}/{self.rf_model.__class__.__name__}_{target_col}.json")
             elif model == 'xgb': 
                 self.xgb_model.fit(self.X_train, self.y_train)
                 self.xgb_model.save_model(f"{ckpt}/{self.xgb_model.__class__.__name__}_{target_col}.json")
             elif model == 'bilstm':   
-                self.bilstm_acc = train_val_dl_models(self.bilstm_model, self.train_loader, self.val_loader)
+                self.bilstm_acc, _, _ = train_val_dl_models(self.bilstm_model, self.train_loader, self.val_loader)
                 torch.save(self.bilstm_model.state_dict(), f"{ckpt}/{self.bilstm_model.__class__.__name__}_{target_col}.pth")
             elif model == 'mlp':  
-                self.mlp_acc = train_val_dl_models(self.mlp_model, self.train_loader, self.val_loader, target_col)
+                self.mlp_acc, val_true, val_pred = train_val_dl_models(self.mlp_model, self.train_loader, self.val_loader)
+                self.true_and_predictions[model][target_col] = (val_true, val_pred)
                 torch.save(self.mlp_model.state_dict(), f"{ckpt}/{self.mlp_model.__class__.__name__}_{target_col}.pth")
-
 
     def validate_and_generate_acc_scr(self, target_col):
         logging.info(f'Validating Models...')
@@ -355,9 +387,16 @@ class My_training_class:
                 logging.info(f'MLP Val Acc: { self.mlp_acc:.2f}') 
         logging.info(20*'=')
 
+    def generate_CM(self):
+        logging.info(f'generating CM')
+        for model in self.models:
+            plot_CM(self.true_and_predictions[model], model)
+
     def begin_training(self):
         logging.info(f'Training started with {self.embedding_model} Embedding for {self.models}') #TODO preprocess only one time
-        self.preprocess_data('data/pandora_processed_train_nov26.csv', None, False, True)
+        self.preprocess_data('data/pandora_processed_train.csv', None, False, True)
+        # self.preprocess_data('data/all_processed_train_data_nov_27.csv', None, False, True)
+        # self.preprocess_data('data/mypersonality_processed_data_nov_27.csv', None, False, True)
         # self.preprocess_data('data/mypersonality.csv', 'data/LIWC_mypersonality_oct_2.csv', True)
         logging.info(70*'>')
         for target_col in ['cOPN', 'cCON', 'cEXT', 'cAGR', 'cNEU']:
@@ -369,17 +408,21 @@ class My_training_class:
             self.fit_and_save_models(target_col)
             self.validate_and_generate_acc_scr(target_col)
             logging.info(70*'>')
+        self.generate_CM()
+
 
 if __name__ == "__main__":
     try:
-        my_train = My_training_class(model_list=['mlp'], embedding_model='roberta-base', demo=sys.argv[1])
+        demo = sys.argv[1]
+        emb = sys.argv[2]
+        models = sys.argv[3]
+        print(demo, emb, models)
+        emb_models = {'1':'roberta-base', '2':'bert-base-uncased', '3':'vinai/bertweet-base', '4':'xlnet-base-cased'}
+        emb = emb_models[emb] if emb in emb_models.keys() else None
+        models = ['mlp'] if models == 'all' else models.tolist()
+        print(demo, emb, models)
+        my_train = My_training_class(model_list=models, embedding_model=emb, demo=demo)
         my_train.begin_training()
-        # my_train_bert = My_training_class(model_list=['xgb', 'mlp'], embedding_model='bert-base-uncased')
-        # my_train_bert.begin_training(demo)
-        # train_bert_tweet = My_training_class(model_list=['xgb', 'mlp'], embedding_model='vinai/bertweet-base')
-        # train_bert_tweet.begin_training(demo)
-        # my_train_xlnet = My_training_class(model_list=['xgb', 'mlp'], embedding_model='xlnet-base-cased')
-        # my_train_xlnet.begin_training(demo)
     except:
         traceback.print_exc()
         print("missing arguments!!!!")
