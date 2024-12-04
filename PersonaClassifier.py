@@ -17,6 +17,7 @@ from torch.utils.data import DataLoader, TensorDataset
 from sklearn.metrics import accuracy_score, confusion_matrix, ConfusionMatrixDisplay, precision_score, recall_score, f1_score, roc_curve, auc
 import logging, sys
 from datetime import datetime
+from sklearn.model_selection import KFold
 global timestamp
 global ckpt 
 global logging
@@ -230,13 +231,49 @@ def train_val_dl_models(model, train_loader, val_loader, max_grad_norm=1.0, epoc
             logging.info(f'Epoch [{epoch + 1}/{epochs}], Train Loss: {total_loss / len(train_loader):.4f}, 'f'Val Loss: {val_loss / len(val_loader):.4f}, Val Accuracy: {val_accuracy:.4f}')
     return val_accuracy, val_preds, torch.cat(val_scores)
 
+def k_fold_train_val_dl_models(model, dataset, k=5, batch_size=32, max_grad_norm=1.0, epochs=16, lr=0.001):
+    """
+    Perform k-fold cross-validation for a deep learning model.
+    
+    Parameters:
+    - model_class: A callable to instantiate the model (e.g., a class name).
+    - dataset: A PyTorch Dataset containing the data.
+    - k: Number of folds.
+    - batch_size: Batch size for data loaders.
+    - max_grad_norm: Maximum gradient norm for clipping.
+    - epochs: Number of training epochs.
+    - lr: Learning rate.
+    """
+
+    kf = KFold(n_splits=k, shuffle=True, random_state=42)
+    fold_results = []
+
+    logging.info(f"Performing {k}-Fold Cross-Validation")
+    for fold, (train_indices, val_indices) in enumerate(kf.split(dataset)):
+        logging.info(f"Fold {fold + 1}/{k}")
+        # Split dataset into training and validation
+        train_subset = torch.utils.data.Subset(dataset, train_indices)
+        val_subset = torch.utils.data.Subset(dataset, val_indices)
+
+        train_loader = torch.utils.data.DataLoader(train_subset, batch_size=batch_size, shuffle=True)
+        val_loader = torch.utils.data.DataLoader(val_subset, batch_size=batch_size)
+
+        val_accuracy, val_preds, val_scores = train_single_fold(model, train_loader=train_loader, val_loader=val_loader, max_grad_norm=max_grad_norm, epochs=epochs, lr=lr)
+        fold_results.append(val_accuracy)
+        logging.info(f"Fold {fold + 1} Accuracy: {val_accuracy:.4f}")
+
+    avg_accuracy = sum(fold_results) / k
+    logging.info(f"Average Accuracy across {k} folds: {avg_accuracy:.4f}")
+    return fold_results, avg_accuracy
+
 class My_training_class:
-    def __init__(self, filepath, model_list=['svm', 'lr', 'rf', 'xgb', 'bilstm', 'mlp'], embedding_model=None, demo=False):
+    def __init__(self, filepath, model_list, embedding_model=None, demo=False, kFold=False):
         self.df = None
         self.filepath = filepath
-        self.models = model_list
+        self.models = model_list if model_list is not None else ['svm', 'lr', 'rf', 'xgb', 'bilstm', 'mlp']
         self.embedding_model = embedding_model
         self.demo = True if demo == 'true' or demo == "True" or demo is True else False
+        self.kFold = kFold
         self.all_outputs= {}
         for model in model_list:
             self.all_outputs[model] = {}
@@ -297,17 +334,20 @@ class My_training_class:
         y = y.ravel()  # This will reshape y to (n_samples,)
         # print("After Shape of y:", y.shape)
 
-        self.X_train, self.X_val, self.y_train, self.y_val = train_test_split(X, y, test_size=test_size, random_state=42)
-        # X_test, X_val, y_test, y_val = train_test_split(X_val, y_val, test_size=0.5, random_state=42)
-        logging.info(f'Test size: {test_size}, Train  size: {self.X_train.shape}, Val size: {self.X_val.shape}')
-        X_train_tensor = torch.tensor(self.X_train, dtype=torch.float32)
-        y_train_tensor = torch.tensor(self.y_train, dtype=torch.float32)
-        X_val_tensor = torch.tensor(self.X_val, dtype=torch.float32)
-        y_val_tensor = torch.tensor(self.y_val, dtype=torch.float32)
-        train_dataset = TensorDataset(X_train_tensor, y_train_tensor)
-        val_dataset = TensorDataset(X_val_tensor, y_val_tensor)
-        self.train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
-        self.val_loader = DataLoader(val_dataset, batch_size=32, shuffle=False)
+        if self.kFold:
+            logging.info(f'Skipping Data Split.')
+        else:
+            self.X_train, self.X_val, self.y_train, self.y_val = train_test_split(X, y, test_size=test_size, random_state=42)
+            # X_test, X_val, y_test, y_val = train_test_split(X_val, y_val, test_size=0.5, random_state=42)
+            logging.info(f'Test size: {test_size}, Train  size: {self.X_train.shape}, Val size: {self.X_val.shape}')
+            X_train_tensor = torch.tensor(self.X_train, dtype=torch.float32)
+            y_train_tensor = torch.tensor(self.y_train, dtype=torch.float32)
+            X_val_tensor = torch.tensor(self.X_val, dtype=torch.float32)
+            y_val_tensor = torch.tensor(self.y_val, dtype=torch.float32)
+            train_dataset = TensorDataset(X_train_tensor, y_train_tensor)
+            val_dataset = TensorDataset(X_val_tensor, y_val_tensor)
+            self.train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
+            self.val_loader = DataLoader(val_dataset, batch_size=32, shuffle=False)
         logging.info(f'Data Preparation Completed.')
 
     def init_models(self):
@@ -389,7 +429,9 @@ class My_training_class:
 
     def display_metrics(self):
         logging.info(f'generating metrics and confusion matrix ..')
+        performance_records = [] 
         for model in self.models:
+            logging.info(15*'='+f" {model} "+ 15*'=')
             a_output = self.all_outputs[model]
             n_classifiers = len(a_output)
             fig, axes = plt.subplots(1, n_classifiers, figsize=(5 * n_classifiers, 5))
@@ -406,17 +448,32 @@ class My_training_class:
                 f1 = f1_score(y_true, y_pred)
                 specificity = tn / (tn + fp) if (tn + fp) > 0 else 0  # Avoid division by zero
                 false_positive_rate = fp / (fp + tn) if (fp + tn) > 0 else 0  # Avoid division by zero
-                logging.info(20*'-')
-                logging.info(f"{name}")
-                logging.info(f"Confusion Matrix: {cm}")
+                logging.info(10*'-'+f" {name} "+ 10*'-')
                 logging.info(f"Accuracy: {accuracy:.2f}")
                 logging.info(f"Precision: {precision:.2f}")
                 logging.info(f"Recall (Sensitivity): {recall:.2f}")
                 logging.info(f"F1-Score: {f1:.2f}")
                 logging.info(f"Specificity: {specificity:.2f}")
                 logging.info(f"False Positive Rate: {false_positive_rate:.2f}")
+                logging.info(f"Confusion Matrix: {cm}")
+
+                performance_records.append({
+                    "Model": model,
+                    "Classifier": name,
+                    "Accuracy": accuracy,
+                    "Precision": precision,
+                    "Recall": recall,
+                    "F1-Score": f1,
+                    "Specificity": specificity,
+                    "False Positive Rate": false_positive_rate,
+                    "Confusion Matrix": cm 
+                })
+
             plt.tight_layout()
             plt.savefig(f"{ckpt}/{model}_cm.png")
+        performance_df = pd.DataFrame(performance_records)
+        logging.info(f"Performance metrics dataframe created with shape: {performance_df.shape}")
+        performance_df.to_csv(f"{ckpt}/performance.csv")
 
     def generate_auroc(self):      
         for model in self.models:
@@ -461,7 +518,9 @@ if __name__ == "__main__":
         emb = sys.argv[2]
         models = sys.argv[3]
         data_type = sys.argv[4]
-        print(demo, emb, models, data_type)
+        # kFold = sys.argv[5]
+        kFold = False
+        print(demo, emb, models, data_type, kFold)
         emb_models = {'1':'roberta-base', '2':'bert-base-uncased', '3':'vinai/bertweet-base', '4':'xlnet-base-cased'}
         data_types = {
             'rd': 'data/pandora_processed_train.csv', 
@@ -470,9 +529,9 @@ if __name__ == "__main__":
             }
 
         emb = emb_models[emb] if emb in emb_models.keys() else None
-        models = ['lr', 'rf', 'xgb', 'mlp', 'bilstm'] if models == 'all' else models.tolist()
+        models = ['lr', 'rf', 'xgb', 'mlp', 'bilstm'] if models == 'all' else ["mlp"]
         filepath = data_types[data_type] if data_type in data_types.keys() else None
-        print(demo, emb, models, filepath)
+        print(demo, emb, models, filepath, kFold)
         
         ## Initializing log
         timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
@@ -481,7 +540,11 @@ if __name__ == "__main__":
             os.makedirs(ckpt)
         logging.basicConfig(filename=f'{ckpt}/log_{timestamp}.log', level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
        
-        my_train = My_training_class(filepath, model_list=models, embedding_model=emb, demo=demo)
+        my_train = My_training_class(filepath,
+            model_list=models,
+            embedding_model=emb,
+            demo=demo,
+            kFold=kFold)
         my_train.begin_training()
     except:
         traceback.print_exc()
