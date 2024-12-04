@@ -17,12 +17,9 @@ from torch.utils.data import DataLoader, TensorDataset
 from sklearn.metrics import accuracy_score, confusion_matrix, ConfusionMatrixDisplay, precision_score, recall_score, f1_score, roc_curve, auc
 import logging, sys
 from datetime import datetime
-
-timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
-ckpt = f"checkpoint/{timestamp}"
-if not os.path.exists(ckpt):
-    os.makedirs(ckpt)
-logging.basicConfig(filename=f'{ckpt}/log_{timestamp}.log', level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+global timestamp
+global ckpt 
+global logging
 
 def read_data(main_file, liwc_file, is_mypersonality=True):
     if is_mypersonality:
@@ -160,7 +157,6 @@ class MLP(nn.Module):
         x = self.fc4(x)
         return x
 
-
 class DotProductAttention(nn.Module):
     def __init__(self, hidden_dim):
         super(DotProductAttention, self).__init__()
@@ -235,8 +231,9 @@ def train_val_dl_models(model, train_loader, val_loader, max_grad_norm=1.0, epoc
     return val_accuracy, val_preds, torch.cat(val_scores)
 
 class My_training_class:
-    def __init__(self,  model_list=['svm', 'lr', 'rf', 'xgb', 'bilstm', 'mlp'], embedding_model=None, demo=False):
+    def __init__(self, filepath, model_list=['svm', 'lr', 'rf', 'xgb', 'bilstm', 'mlp'], embedding_model=None, demo=False):
         self.df = None
+        self.filepath = filepath
         self.models = model_list
         self.embedding_model = embedding_model
         self.demo = True if demo == 'true' or demo == "True" or demo is True else False
@@ -338,7 +335,7 @@ class My_training_class:
                 # self.svm_model.save_model(f"{ckpt}/{self.svm_model.__class__.__name__}_{target_col}.json")
             elif model == 'lr':
                 self.lr_model.fit(self.X_train, self.y_train)
-                self.lr_model.save_model(f"{ckpt}/{self.lr_model.__class__.__name__}_{target_col}.json")
+                # self.lr_model.save_model(f"{ckpt}/{self.lr_model.__class__.__name__}_{target_col}.json")
             elif model == 'rf':
                 self.rf_model.fit(self.X_train, self.y_train)
                 # self.rf_model.save_model(f"{ckpt}/{self.rf_model.__class__.__name__}_{target_col}.json")
@@ -422,8 +419,8 @@ class My_training_class:
             plt.savefig(f"{ckpt}/{model}_cm.png")
 
     def generate_auroc(self):      
-        plt.figure(figsize=(8, 6))
         for model in self.models:
+            plt.figure(figsize=(8, 6))
             a_output = self.all_outputs[model]
             for name, (y_true, y_pred, y_scores) in a_output.items():
                 fpr, tpr, _ = roc_curve(y_true, y_scores)
@@ -434,18 +431,15 @@ class My_training_class:
             plt.ylim([0.0, 1.05])
             plt.xlabel('False Positive Rate')
             plt.ylabel('True Positive Rate')
-            plt.title('ROC Curves for Multiple Classifiers (Different True Labels)')
+            plt.title('ROC Curves for Multiple (Trait) Classifiers')
             plt.legend(loc="lower right")
             plt.grid(alpha=0.3)
             plt.savefig(f'{ckpt}/{model}_auroc.png')
             plt.show()
 
-
     def begin_training(self):
         logging.info(f'Training started with {self.embedding_model} Embedding for {self.models}') #TODO preprocess only one time
-        self.preprocess_data('data/pandora_processed_train.csv', None, False, True)
-        # self.preprocess_data('data/all_processed_train_data_nov_27.csv', None, False, True)
-        # self.preprocess_data('data/mypersonality_processed_data_nov_27.csv', None, False, True)
+        self.preprocess_data(self.filepath, None, False, True)
         # self.preprocess_data('data/mypersonality.csv', 'data/LIWC_mypersonality_oct_2.csv', True)
         logging.info(70*'>')
         for target_col in ['cOPN', 'cCON', 'cEXT', 'cAGR', 'cNEU']:
@@ -466,16 +460,30 @@ if __name__ == "__main__":
         demo = sys.argv[1]  
         emb = sys.argv[2]
         models = sys.argv[3]
-        print(demo, emb, models)
+        data_type = sys.argv[4]
+        print(demo, emb, models, data_type)
         emb_models = {'1':'roberta-base', '2':'bert-base-uncased', '3':'vinai/bertweet-base', '4':'xlnet-base-cased'}
+        data_types = {
+            'rd': 'data/pandora_processed_train.csv', 
+            'fb': 'data/mypersonality_processed_data_nov_27.csv',
+            'both':'data/all_processed_train_data_nov_27.csv'
+            }
+
         emb = emb_models[emb] if emb in emb_models.keys() else None
-        models = ['lr', 'mlp'] if models == 'all' else models.tolist()
-        print(demo, emb, models)
-        my_train = My_training_class(model_list=models, embedding_model=emb, demo=demo)
+        models = ['lr', 'rf', 'xgb', 'mlp', 'bilstm'] if models == 'all' else models.tolist()
+        filepath = data_types[data_type] if data_type in data_types.keys() else None
+        print(demo, emb, models, filepath)
+        
+        ## Initializing log
+        timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
+        ckpt = f"checkpoint/{emb.split('-')[0]}-{timestamp}" if emb else f"checkpoint/{timestamp}"
+        if not os.path.exists(ckpt):
+            os.makedirs(ckpt)
+        logging.basicConfig(filename=f'{ckpt}/log_{timestamp}.log', level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+       
+        my_train = My_training_class(filepath, model_list=models, embedding_model=emb, demo=demo)
         my_train.begin_training()
     except:
         traceback.print_exc()
         print("missing arguments!!!!")
         exit(0)  
-        
-
