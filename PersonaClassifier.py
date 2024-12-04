@@ -338,7 +338,7 @@ class My_training_class:
                 # self.svm_model.save_model(f"{ckpt}/{self.svm_model.__class__.__name__}_{target_col}.json")
             elif model == 'lr':
                 self.lr_model.fit(self.X_train, self.y_train)
-                # self.lr_model.save_model(f"{ckpt}/{self.lr_model.__class__.__name__}_{target_col}.json")
+                self.lr_model.save_model(f"{ckpt}/{self.lr_model.__class__.__name__}_{target_col}.json")
             elif model == 'rf':
                 self.rf_model.fit(self.X_train, self.y_train)
                 # self.rf_model.save_model(f"{ckpt}/{self.rf_model.__class__.__name__}_{target_col}.json")
@@ -360,25 +360,25 @@ class My_training_class:
         for model in self.models:
             if model =='svm':
                 svm_y_pred = self.svm_model.predict(self.X_val)
-                svm_y_probs = self.svm_model.predict_proba(self.X_val)
+                svm_y_probs = self.svm_model.predict_proba(self.X_val)[:, 1]
                 svm_accuracy = accuracy_score(self.y_val, svm_y_pred)
                 logging.info(f'SVM Val Acc: {svm_accuracy:.2f}')
                 self.all_outputs[model][target_col] = (self.y_val, svm_y_pred, svm_y_probs)
             elif model == 'lr':
                 lr_y_pred = self.lr_model.predict(self.X_val)
-                lr_y_probs = self.lr_model.predict_proba(self.X_val)
+                lr_y_probs = self.lr_model.predict_proba(self.X_val)[:, 1]
                 lr_accuracy = accuracy_score(self.y_val, lr_y_pred)
                 self.all_outputs[model][target_col] = (self.y_val, lr_y_pred, lr_y_probs)
                 logging.info(f'LR Val Acc: {lr_accuracy:.2f}')
             elif model == 'rf':
                 rf_y_pred = self.rf_model.predict(self.X_val)
-                rf_y_proba = self.rf_model.predict_proba(self.X_val)
+                rf_y_proba = self.rf_model.predict_proba(self.X_val)[:, 1]
                 rf_accuracy = accuracy_score(self.y_val, rf_y_pred)
                 self.all_outputs[model][target_col] = (self.y_val, rf_y_pred, rf_y_proba)
                 logging.info(f'RF Val Acc: {rf_accuracy:.2f}')
             elif model == 'xgb': 
                 xgb_y_pred = self.xgb_model.predict(self.X_val)
-                xgb_y_proba = self.xgb_model.predict_proba(self.X_val)
+                xgb_y_proba = self.xgb_model.predict_proba(self.X_val)[:, 1]
                 xgb_accuracy = accuracy_score(self.y_val, xgb_y_pred)
                 self.all_outputs[model][target_col] = (self.y_val, xgb_y_pred, xgb_y_proba)
                 logging.info(f'SGBoost Val Acc: {xgb_accuracy:.2f}')
@@ -463,13 +463,13 @@ class My_training_class:
 
 if __name__ == "__main__":
     try:
-        demo = sys.argv[1]
+        demo = sys.argv[1]  
         emb = sys.argv[2]
         models = sys.argv[3]
         print(demo, emb, models)
         emb_models = {'1':'roberta-base', '2':'bert-base-uncased', '3':'vinai/bertweet-base', '4':'xlnet-base-cased'}
         emb = emb_models[emb] if emb in emb_models.keys() else None
-        models = ['mlp'] if models == 'all' else models.tolist()
+        models = ['lr', 'mlp'] if models == 'all' else models.tolist()
         print(demo, emb, models)
         my_train = My_training_class(model_list=models, embedding_model=emb, demo=demo)
         my_train.begin_training()
