@@ -14,7 +14,7 @@ import xgboost as xgb
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader, TensorDataset
-from sklearn.metrics import accuracy_score, confusion_matrix, ConfusionMatrixDisplay, precision_score, recall_score, f1_score
+from sklearn.metrics import accuracy_score, confusion_matrix, ConfusionMatrixDisplay, precision_score, recall_score, f1_score, roc_curve, auc
 import logging, sys
 from datetime import datetime
 
@@ -218,20 +218,21 @@ def train_val_dl_models(model, train_loader, val_loader, max_grad_norm=1.0, epoc
             optimizer.step()
             total_loss += loss.item()
         model.eval()  
-        val_preds, val_labels, val_loss = [], [], 0
+        val_preds, val_labels, val_scores, val_loss = [], [], [], 0
         with torch.no_grad():  
             for inputs, labels in val_loader:
                 outputs= model(inputs)
                 val_loss += criterion(outputs.squeeze(), labels).item()  
                 val_preds.append(torch.sigmoid(outputs))  
                 val_labels.append(labels) 
+                val_scores.append(outputs)
         val_preds = torch.cat(val_preds)
         val_labels = torch.cat(val_labels)
         val_preds = (val_preds > 0.5).float() 
         val_accuracy = accuracy_score(val_labels.numpy(), val_preds.numpy())
         if epoch % 4 == 0:
             logging.info(f'Epoch [{epoch + 1}/{epochs}], Train Loss: {total_loss / len(train_loader):.4f}, 'f'Val Loss: {val_loss / len(val_loader):.4f}, Val Accuracy: {val_accuracy:.4f}')
-    return val_accuracy, val_preds
+    return val_accuracy, val_preds, torch.cat(val_scores)
 
 class My_training_class:
     def __init__(self,  model_list=['svm', 'lr', 'rf', 'xgb', 'bilstm', 'mlp'], embedding_model=None, demo=False):
@@ -239,9 +240,9 @@ class My_training_class:
         self.models = model_list
         self.embedding_model = embedding_model
         self.demo = True if demo == 'true' or demo == "True" or demo is True else False
-        self.all_true_and_predictions= {}
+        self.all_outputs= {}
         for model in model_list:
-            self.all_true_and_predictions[model] = {}
+            self.all_outputs[model] = {}
 
     def preprocess_data(self, main_file, liwc_file, is_mypersonality=True, is_preprocessed=False):
         logging.info(f'Preprocessing {main_file}')
@@ -345,12 +346,12 @@ class My_training_class:
                 self.xgb_model.fit(self.X_train, self.y_train)
                 self.xgb_model.save_model(f"{ckpt}/{self.xgb_model.__class__.__name__}_{target_col}.json")
             elif model == 'bilstm':   
-                self.bilstm_acc, val_pred = train_val_dl_models(self.bilstm_model, self.train_loader, self.val_loader)
-                self.all_true_and_predictions[model][target_col] = (self.y_val, val_pred)
+                self.bilstm_acc, y_pred, y_scores = train_val_dl_models(self.bilstm_model, self.train_loader, self.val_loader)
+                self.all_outputs[model][target_col] = (self.y_val, y_pred, y_scores)
                 torch.save(self.bilstm_model.state_dict(), f"{ckpt}/{self.bilstm_model.__class__.__name__}_{target_col}.pth")
             elif model == 'mlp':  
-                self.mlp_acc, val_pred = train_val_dl_models(self.mlp_model, self.train_loader, self.val_loader)
-                self.all_true_and_predictions[model][target_col] = (self.y_val, val_pred)
+                self.mlp_acc, y_pred, y_scores = train_val_dl_models(self.mlp_model, self.train_loader, self.val_loader)
+                self.all_outputs[model][target_col] = (self.y_val, y_pred, y_scores)
                 torch.save(self.mlp_model.state_dict(), f"{ckpt}/{self.mlp_model.__class__.__name__}_{target_col}.pth")
 
     def validate_and_generate_acc_scr(self, target_col):
@@ -359,23 +360,27 @@ class My_training_class:
         for model in self.models:
             if model =='svm':
                 svm_y_pred = self.svm_model.predict(self.X_val)
+                svm_y_probs = self.svm_model.predict_proba(self.X_val)
                 svm_accuracy = accuracy_score(self.y_val, svm_y_pred)
                 logging.info(f'SVM Val Acc: {svm_accuracy:.2f}')
-                self.all_true_and_predictions[model][target_col] = (self.y_val, svm_y_pred)
+                self.all_outputs[model][target_col] = (self.y_val, svm_y_pred, svm_y_probs)
             elif model == 'lr':
                 lr_y_pred = self.lr_model.predict(self.X_val)
+                lr_y_probs = self.lr_model.predict_proba(self.X_val)
                 lr_accuracy = accuracy_score(self.y_val, lr_y_pred)
-                self.all_true_and_predictions[model][target_col] = (self.y_val, lr_y_pred)
+                self.all_outputs[model][target_col] = (self.y_val, lr_y_pred, lr_y_probs)
                 logging.info(f'LR Val Acc: {lr_accuracy:.2f}')
             elif model == 'rf':
                 rf_y_pred = self.rf_model.predict(self.X_val)
+                rf_y_proba = self.rf_model.predict_proba(self.X_val)
                 rf_accuracy = accuracy_score(self.y_val, rf_y_pred)
-                self.all_true_and_predictions[model][target_col] = (self.y_val, rf_y_pred)
+                self.all_outputs[model][target_col] = (self.y_val, rf_y_pred, rf_y_proba)
                 logging.info(f'RF Val Acc: {rf_accuracy:.2f}')
             elif model == 'xgb': 
                 xgb_y_pred = self.xgb_model.predict(self.X_val)
+                xgb_y_proba = self.xgb_model.predict_proba(self.X_val)
                 xgb_accuracy = accuracy_score(self.y_val, xgb_y_pred)
-                self.all_true_and_predictions[model][target_col] = (self.y_val, xgb_y_pred)
+                self.all_outputs[model][target_col] = (self.y_val, xgb_y_pred, xgb_y_proba)
                 logging.info(f'SGBoost Val Acc: {xgb_accuracy:.2f}')
             elif model == 'bilstm':   
                 # bilstm_acc = train_val_dl_models(self.bilstm_model, self.train_loader, self.val_loader)
@@ -388,10 +393,10 @@ class My_training_class:
     def display_metrics(self):
         logging.info(f'generating metrics and confusion matrix ..')
         for model in self.models:
-            true_and_predictions = self.all_true_and_predictions[model]
-            n_classifiers = len(true_and_predictions)
+            a_output = self.all_outputs[model]
+            n_classifiers = len(a_output)
             fig, axes = plt.subplots(1, n_classifiers, figsize=(5 * n_classifiers, 5))
-            for ax, (name, (y_true, y_pred)) in zip(axes, true_and_predictions.items()):
+            for ax, (name, (y_true, y_pred, _)) in zip(axes, a_output.items()):
                 cm = confusion_matrix(y_true, y_pred)
                 disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=["Class 0", "Class 1"])
                 disp.plot(cmap=plt.cm.Blues, ax=ax, colorbar=False)
@@ -414,7 +419,27 @@ class My_training_class:
                 logging.info(f"Specificity: {specificity:.2f}")
                 logging.info(f"False Positive Rate: {false_positive_rate:.2f}")
             plt.tight_layout()
-            plt.savefig(f"{ckpt}/cm_{model}.png")
+            plt.savefig(f"{ckpt}/{model}_cm.png")
+
+    def generate_auroc(self):      
+        plt.figure(figsize=(8, 6))
+        for model in self.models:
+            a_output = self.all_outputs[model]
+            for name, (y_true, y_pred, y_scores) in a_output.items():
+                fpr, tpr, _ = roc_curve(y_true, y_scores)
+                roc_auc = auc(fpr, tpr)
+                plt.plot(fpr, tpr, lw=2, label=f'{name} (AUC = {roc_auc:.2f})')
+            plt.plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--', label="Random Guessing")
+            plt.xlim([0.0, 1.0])
+            plt.ylim([0.0, 1.05])
+            plt.xlabel('False Positive Rate')
+            plt.ylabel('True Positive Rate')
+            plt.title('ROC Curves for Multiple Classifiers (Different True Labels)')
+            plt.legend(loc="lower right")
+            plt.grid(alpha=0.3)
+            plt.savefig(f'{ckpt}/{model}_auroc.png')
+            plt.show()
+
 
     def begin_training(self):
         logging.info(f'Training started with {self.embedding_model} Embedding for {self.models}') #TODO preprocess only one time
@@ -433,6 +458,7 @@ class My_training_class:
             self.validate_and_generate_acc_scr(target_col)
             logging.info(70*'>')
         self.display_metrics()
+        self.generate_auroc()
 
 
 if __name__ == "__main__":
