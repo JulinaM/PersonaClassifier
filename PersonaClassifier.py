@@ -22,118 +22,139 @@ global timestamp
 global ckpt 
 global logging
 
-def read_data(main_file, liwc_file, is_mypersonality=True):
-    if is_mypersonality:
-        main_df = pd.read_csv(main_file, encoding='Windows-1252')
-        main_df.drop(columns=['#AUTHID', 'sEXT', 'sNEU', 'sAGR', 'sCON', 'sOPN', 'DATE', 'NETWORKSIZE', 'BETWEENNESS', 'NBETWEENNESS', 'DENSITY', 'BROKERAGE', 'NBROKERAGE','TRANSITIVITY'], inplace=True)
-        main_df[['cOPN', 'cEXT', 'cNEU', 'cAGR', 'cCON']] = main_df[['cOPN', 'cEXT', 'cNEU', 'cAGR', 'cCON']].replace({'y': 1, 'n': 0})
-        liwc_df = pd.read_csv(liwc_file)
-        liwc_df = liwc_df.drop(['Unnamed: 0', '#AUTHID', 'ColumnID', 'STATUS'], axis=1)
-    else:
-        main_df = pd.read_csv(main_file)
-        main_df.drop(columns=['#AUTHID'], inplace=True)
-        cols = ['cOPN', 'cEXT', 'cNEU', 'cAGR', 'cCON']
-        for col in cols:
-            mean_value = main_df[col].mean()
-            main_df[f'{col}'] = main_df[col] > mean_value
-        main_df[cols] = main_df[cols].replace({True: 1, False: 0})  
-        liwc_df = pd.read_csv(liwc_file)
-        liwc_df = liwc_df.drop(['Unnamed: 0', '#AUTHID', 'STATUS', 'cOPN', 'cEXT', 'cNEU', 'cAGR', 'cCON', ], axis=1)
+class DataProcessor:
+    def read_data(main_file, liwc_file, is_mypersonality=True):
+        if is_mypersonality:
+            main_df = pd.read_csv(main_file, encoding='Windows-1252')
+            main_df.drop(columns=['#AUTHID', 'sEXT', 'sNEU', 'sAGR', 'sCON', 'sOPN', 'DATE', 'NETWORKSIZE', 'BETWEENNESS', 'NBETWEENNESS', 'DENSITY', 'BROKERAGE', 'NBROKERAGE','TRANSITIVITY'], inplace=True)
+            main_df[['cOPN', 'cEXT', 'cNEU', 'cAGR', 'cCON']] = main_df[['cOPN', 'cEXT', 'cNEU', 'cAGR', 'cCON']].replace({'y': 1, 'n': 0})
+            liwc_df = pd.read_csv(liwc_file)
+            liwc_df = liwc_df.drop(['Unnamed: 0', '#AUTHID', 'ColumnID', 'STATUS'], axis=1)
+        else:
+            main_df = pd.read_csv(main_file)
+            main_df.drop(columns=['#AUTHID'], inplace=True)
+            cols = ['cOPN', 'cEXT', 'cNEU', 'cAGR', 'cCON']
+            for col in cols:
+                mean_value = main_df[col].mean()
+                main_df[f'{col}'] = main_df[col] > mean_value
+            main_df[cols] = main_df[cols].replace({True: 1, False: 0})  
+            liwc_df = pd.read_csv(liwc_file)
+            liwc_df = liwc_df.drop(['Unnamed: 0', '#AUTHID', 'STATUS', 'cOPN', 'cEXT', 'cNEU', 'cAGR', 'cCON', ], axis=1)
 
-    logging.info(f'File={main_file} shape={main_df.shape}')
-    logging.info(f'File={liwc_file} shape={liwc_df.shape}')
+        logging.info(f'File={main_file} shape={main_df.shape}')
+        logging.info(f'File={liwc_file} shape={liwc_df.shape}')
 
-    df = pd.concat([main_df, liwc_df], axis=1)
-    logging.info(f'Merged main and liwc files, Shape:{df.shape}')
-    return df
+        df = pd.concat([main_df, liwc_df], axis=1)
+        logging.info(f'Merged main and liwc files, Shape:{df.shape}')
+        return df
 
-def process_NRC_VAD(df):
-    nrc_vad = pd.read_csv('data/NRC-VAD-Lexicon/NRC-VAD-Lexicon.csv', sep="\t")  
-    nrc_vad_dict = nrc_vad.set_index('Word').to_dict(orient='index')
-    def get_vad_scores(text):
-        words = text.split()
-        valence_scores, arousal_scores, dominance_scores = [], [], []
-        for word in words:
-            word = word.lower()  # Lowercase to match the lexicon
-            if word in nrc_vad_dict:
-                vad_values = nrc_vad_dict[word]
-                valence_scores.append(vad_values['Valence'])
-                arousal_scores.append(vad_values['Arousal'])
-                dominance_scores.append(vad_values['Dominance'])
-        if not valence_scores:
-            return {'Valence': 0, 'Arousal': 0, 'Dominance': 0}
+    def process_NRC_VAD(df):
+        nrc_vad = pd.read_csv('data/NRC-VAD-Lexicon/NRC-VAD-Lexicon.csv', sep="\t")  
+        nrc_vad_dict = nrc_vad.set_index('Word').to_dict(orient='index')
+        def get_vad_scores(text):
+            words = text.split()
+            valence_scores, arousal_scores, dominance_scores = [], [], []
+            for word in words:
+                word = word.lower()  # Lowercase to match the lexicon
+                if word in nrc_vad_dict:
+                    vad_values = nrc_vad_dict[word]
+                    valence_scores.append(vad_values['Valence'])
+                    arousal_scores.append(vad_values['Arousal'])
+                    dominance_scores.append(vad_values['Dominance'])
+            if not valence_scores:
+                return {'Valence': 0, 'Arousal': 0, 'Dominance': 0}
 
-        valence_avg = sum(valence_scores) / len(valence_scores)
-        arousal_avg = sum(arousal_scores) / len(arousal_scores)
-        dominance_avg = sum(dominance_scores) / len(dominance_scores)
-        return {'Valence': valence_avg, 'Arousal': arousal_avg, 'Dominance': dominance_avg}
+            valence_avg = sum(valence_scores) / len(valence_scores)
+            arousal_avg = sum(arousal_scores) / len(arousal_scores)
+            dominance_avg = sum(dominance_scores) / len(dominance_scores)
+            return {'Valence': valence_avg, 'Arousal': arousal_avg, 'Dominance': dominance_avg}
 
-    df['VAD_Scores'] = df['STATUS'].apply( lambda x: get_vad_scores(x))
-    df[['Valence', 'Arousal', 'Dominance']] = pd.DataFrame(df['VAD_Scores'].tolist(), index=df.index)
-    df.drop(columns=['VAD_Scores'], inplace=True)
-    logging.info(f'NRC-VAD shape={df.shape}')
-    return df
+        df['VAD_Scores'] = df['STATUS'].apply( lambda x: get_vad_scores(x))
+        df[['Valence', 'Arousal', 'Dominance']] = pd.DataFrame(df['VAD_Scores'].tolist(), index=df.index)
+        df.drop(columns=['VAD_Scores'], inplace=True)
+        logging.info(f'NRC-VAD shape={df.shape}')
+        return df
 
-def process_NRC_emotion(df):
-    nrc_lexicon = pd.read_csv('data/NRC-Emotion-Lexicon/NRC-Emotion-Lexicon-Wordlevel-v0.92.txt', names=["word", "emotion", "association"],sep="\t", header=None)
-    # Filter out words that have no association with emotions (association == 0)
-    nrc_lexicon = nrc_lexicon[nrc_lexicon['association'] == 1]
-    # nrc_lexicon.drop(columns=['association'], inplace=True)
-    nrc_pivot = nrc_lexicon.pivot(index="word", columns="emotion", values="association").fillna(0).astype(int)
-    # nrc_pivot.head(2)
-    nltk.download('punkt')
-    def get_emotion_counts(text, lexicon):
-        # print(text)
-        words = nltk.word_tokenize(text.lower())
-        emotion_count = defaultdict(int)
-        for word in words:
-            if word in lexicon.index:
-                for emotion in lexicon.columns:
-                    emotion_count[emotion] += lexicon.loc[word, emotion]
-        return emotion_count
-    emotion_counts_list = df['STATUS'].apply(lambda x: get_emotion_counts(x, nrc_pivot))
-    emotion_counts_df = pd.DataFrame(emotion_counts_list.tolist())
-    emotion_counts_df.fillna(0, inplace=True)
-    emotion_counts_df = emotion_counts_df.astype(int)
-    df = pd.concat([df, emotion_counts_df], axis=1)
-    logging.info(f'NRC-Emotion shape={df.shape}')
-    return df
+    def process_NRC_emotion(df):
+        nrc_lexicon = pd.read_csv('data/NRC-Emotion-Lexicon/NRC-Emotion-Lexicon-Wordlevel-v0.92.txt', names=["word", "emotion", "association"],sep="\t", header=None)
+        # Filter out words that have no association with emotions (association == 0)
+        nrc_lexicon = nrc_lexicon[nrc_lexicon['association'] == 1]
+        # nrc_lexicon.drop(columns=['association'], inplace=True)
+        nrc_pivot = nrc_lexicon.pivot(index="word", columns="emotion", values="association").fillna(0).astype(int)
+        # nrc_pivot.head(2)
+        nltk.download('punkt')
+        def get_emotion_counts(text, lexicon):
+            # print(text)
+            words = nltk.word_tokenize(text.lower())
+            emotion_count = defaultdict(int)
+            for word in words:
+                if word in lexicon.index:
+                    for emotion in lexicon.columns:
+                        emotion_count[emotion] += lexicon.loc[word, emotion]
+            return emotion_count
+        emotion_counts_list = df['STATUS'].apply(lambda x: get_emotion_counts(x, nrc_pivot))
+        emotion_counts_df = pd.DataFrame(emotion_counts_list.tolist())
+        emotion_counts_df.fillna(0, inplace=True)
+        emotion_counts_df = emotion_counts_df.astype(int)
+        df = pd.concat([df, emotion_counts_df], axis=1)
+        logging.info(f'NRC-Emotion shape={df.shape}')
+        return df
 
-def process_VADER_sentiment(df):
-    from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
-    analyzer = SentimentIntensityAnalyzer()
-    def find_sentiment(text):
-        # print(text)
-        vs = analyzer.polarity_scores(text)
-        sc = vs['compound']
-        # emo = 'pos' if sc >= 0.05 else 'neu' if -0.05 < sc < 0.05 else 'neg'
-        return sc
-    df[['sent_score']] = df['STATUS'].apply(lambda x: pd.Series(find_sentiment(x)))
-    logging.info(f'VADER shape={df.shape}')
-    return df
+    def process_VADER_sentiment(df):
+        from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
+        analyzer = SentimentIntensityAnalyzer()
+        def find_sentiment(text):
+            # print(text)
+            vs = analyzer.polarity_scores(text)
+            sc = vs['compound']
+            # emo = 'pos' if sc >= 0.05 else 'neu' if -0.05 < sc < 0.05 else 'neg'
+            return sc
+        df[['sent_score']] = df['STATUS'].apply(lambda x: pd.Series(find_sentiment(x)))
+        logging.info(f'VADER shape={df.shape}')
+        return df
 
-def process_embeddings(df, model_name, batch_size=8):
-    from transformers import AutoTokenizer, AutoModel
-    import torch
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    def post_clean_up(df):
+        logging.info(f'Before cleaning up: {df.shape}')
+        def preprocess_text(text):
+            text = text.lower()
+            text = re.sub(r'http\S+|www\S+|https\S+', '', text, flags=re.MULTILINE)
+            text = re.sub(r'@\w+', '', text)
+            text = re.sub(r'#', '', text)
+            text = re.sub(r'\s+', ' ', text).strip()
+            return text
+        # df['STATUS'] = df['STATUS'].apply(preprocess_text)
+        df = df.loc[:, ~df.columns.str.contains('^Unnamed:')]
+        df= df.drop_duplicates(subset='STATUS', keep='first')
+        logging.info(f"After Dropping duplicate: {df.shape}")
+        df['STATUS'] = df['STATUS'].astype(str).fillna('')
+        df = df[df['STATUS'].str.strip() != '']
+        df = df[df['STATUS'].str.split().str.len() >= 3]
+        logging.info(f"After Dropping less than 3 words: {df.shape}")
+        df.fillna(value=0, inplace=True)
+        return df
 
-    logging.info(f'Generating Embedding from {model_name}')
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
-    model = AutoModel.from_pretrained(model_name)
-    model.to(device)
-    model.eval()  
-    embeddings_list = []
-    
-    for i in range(0, len(df), batch_size):
-        batch_texts = df['STATUS'][i:i + batch_size].tolist()
-        inputs = tokenizer(batch_texts, return_tensors='pt', padding=True, truncation=True)
-        inputs = {key: value.to(device) for key, value in inputs.items()}
-        with torch.no_grad():
-            outputs = model(**inputs)
-        cls_embeddings = outputs.last_hidden_state[:, 0, :]
-        embeddings_list.append(cls_embeddings.cpu().numpy())
-    logging.info(f'Embedding Completed for {model_name}')
-    return np.vstack(embeddings_list)
+    def process_embeddings(df, model_name, batch_size=8):
+        from transformers import AutoTokenizer, AutoModel
+        import torch
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+        logging.info(f'Generating Embedding from {model_name}')
+        tokenizer = AutoTokenizer.from_pretrained(model_name)
+        model = AutoModel.from_pretrained(model_name)
+        model.to(device)
+        model.eval()  
+        embeddings_list = []
+        
+        for i in range(0, len(df), batch_size):
+            batch_texts = df['STATUS'][i:i + batch_size].tolist()
+            inputs = tokenizer(batch_texts, return_tensors='pt', padding=True, truncation=True)
+            inputs = {key: value.to(device) for key, value in inputs.items()}
+            with torch.no_grad():
+                outputs = model(**inputs)
+            cls_embeddings = outputs.last_hidden_state[:, 0, :]
+            embeddings_list.append(cls_embeddings.cpu().numpy())
+        logging.info(f'Embedding Completed for {model_name}')
+        return np.vstack(embeddings_list)
 
 class MLP(nn.Module):
     def __init__(self, input_size, hidden_size, output_size, dropout_rate=0.5):
@@ -280,36 +301,19 @@ class My_training_class:
 
     def preprocess_data(self, main_file, liwc_file, is_mypersonality=True, is_preprocessed=False):
         logging.info(f'Preprocessing {main_file}')
+        logging.info(10*' Dr. Julina Maharjan ')
         if self.df is None:
             if not is_preprocessed:
-                self.df = read_data(main_file, liwc_file, is_mypersonality)
-                self.df = process_NRC_emotion(self.df)
-                self.df = process_NRC_VAD(self.df)
-                self.df = process_VADER_sentiment(self.df)
+                self.df = DataProcessor.read_data(main_file, liwc_file, is_mypersonality)
+                self.df = DataProcessor.process_NRC_emotion(self.df)
+                self.df = DataProcessor.process_NRC_VAD(self.df)
+                self.df = DataProcessor.process_VADER_sentiment(self.df)
             else:
                 self.df = pd.read_csv(main_file)
-                logging.info(self.df.shape)
-                def preprocess_text(text):
-                    text = text.lower()
-                    text = re.sub(r'http\S+|www\S+|https\S+', '', text, flags=re.MULTILINE)
-                    text = re.sub(r'@\w+', '', text)
-                    text = re.sub(r'#', '', text)
-                    text = re.sub(r'\s+', ' ', text).strip()
-                    return text
-                # self.df['STATUS'] = self.df['STATUS'].apply(preprocess_text)
-                self.df= self.df.drop_duplicates(subset='STATUS', keep='first')
-                logging.info(f"After Dropping duplicate {self.df.shape}")
-                self.df['STATUS'] = self.df['STATUS'].astype(str).fillna('')
-                self.df = self.df[self.df['STATUS'].str.strip() != '']
-                self.df = self.df[self.df['STATUS'].str.split().str.len() >= 3]
-                logging.info(f"After Dropping less than 3 words {self.df.shape}")
-                logging.info(10*' Dr. Julina Maharjan ')
-            if self.demo:
-                self.df = self.df[:2000]
-                logging.info(5*' DEMO ')
-            self.contextual_embeddings = process_embeddings(self.df, self.embedding_model) if self.embedding_model else None
-            self.df.fillna(value=0, inplace=True)
-            self.df = self.df.loc[:, ~self.df.columns.str.contains('^Unnamed:')]
+                logging.info(f"skipping extracting linguistic features: {self.df.shape}")
+            self.df = self.df[:2000] if self.demo else self.df
+            self.df =  DataProcessor.post_clean_up(self.df)
+            self.contextual_embeddings = DataProcessor.process_embeddings(self.df, self.embedding_model) if self.embedding_model else None
             logging.info(f'Preprocessing Completed. Total shape={self.df.shape}')
         else:
             logging.info(f'Skipping Preprocessing. Total shape={self.df.shape}')
@@ -480,7 +484,13 @@ class My_training_class:
             plt.figure(figsize=(8, 6))
             a_output = self.all_outputs[model]
             for name, (y_true, y_pred, y_scores) in a_output.items():
-                fpr, tpr, _ = roc_curve(y_true, y_scores)
+                fpr, tpr, thresholds = roc_curve(y_true, y_scores)
+                # Compute Youden's Index
+                # logging.info(f"Thresholds: {thresholds}")
+                youden_index = tpr - fpr
+                optimal_idx = youden_index.argmax()
+                optimal_threshold = thresholds[optimal_idx]
+                logging.info(f"Optimal Threshold: {optimal_threshold}")
                 roc_auc = auc(fpr, tpr)
                 plt.plot(fpr, tpr, lw=2, label=f'{name} (AUC = {roc_auc:.2f})')
             plt.plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--', label="Random Guessing")
@@ -510,7 +520,6 @@ class My_training_class:
             logging.info(70*'>')
         self.display_metrics()
         self.generate_auroc()
-
 
 if __name__ == "__main__":
     try:
