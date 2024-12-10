@@ -318,7 +318,7 @@ class My_training_class:
         self.contextual_embeddings = DataProcessor.process_embeddings(self.df, self.embedding_model) if self.embedding_model else None
         logging.info(f'Preprocessing Completed. Total shape={self.df.shape}')
 
-    def prepare_dataset(self, target_col, test_size=0.1):
+    def prepare_dataset(self, target_col, test_size=None):
         all_cols = self.df.columns
         remove_cols = ['STATUS', 'original', 'cEXT','cNEU', 'cAGR', 'cCON', 'cOPN']
         emb_cols = ['bert_embeddings', 'berttweet_embeddings', 'xlnet_embeddings', 'roberta_embeddings']
@@ -333,6 +333,9 @@ class My_training_class:
         logging.info(f'statistical embedding: {stat_features_scaled.shape} ')
         logging.info(f'contextual embedding: {self.contextual_embeddings.shape if self.contextual_embeddings is not None else  []} ')
         logging.info(f'total embedding: {X.shape} ')
+        if test_size is None:
+            logging.info(f'Skipping split.')
+            return X, y
 
         # print("Type of y:", type(y))
         # print("Shape of y:", y.shape)
