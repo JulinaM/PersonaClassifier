@@ -130,7 +130,10 @@ class DataProcessor:
         df = df[df['STATUS'].str.strip() != '']
         df = df[df['STATUS'].str.split().str.len() >= 3]
         logging.info(f"After Dropping less than 3 words: {df.shape}")
-        df.fillna(value=0, inplace=True)
+        logging.info(f"Inserting mean value for null values.")
+        num_cols = df.select_dtypes(include=['number']).columns
+        # df.fillna(df.mean(), inplace=True)
+        df[num_cols] = df[num_cols].fillna(df[num_cols].mean())
         return df
 
     def process_embeddings(df, model_name, batch_size=8):
@@ -328,6 +331,7 @@ class My_training_class:
         stat_features_scaled = scaler.fit_transform(stat_features)
     
         X = np.concatenate([stat_features_scaled, self.contextual_embeddings] if self.contextual_embeddings is not None else [stat_features_scaled], axis=1)
+        # X = np.concatenate([self.contextual_embeddings] if self.contextual_embeddings is not None else [stat_features_scaled], axis=1)
         y = np.array(self.df[[target_col]]) 
         logging.info(f'statistical embedding: {stat_features_scaled.shape} ')
         logging.info(f'contextual embedding: {self.contextual_embeddings.shape if self.contextual_embeddings is not None else  []} ')
@@ -431,7 +435,7 @@ class My_training_class:
                 logging.info(f'MLP Val Acc: { self.mlp_acc:.2f}') 
         logging.info(20*'=')
 
-    def display_metrics(self):
+    def display_metrics(self, savefig=True):
         logging.info(f'generating metrics and confusion matrix ..')
         performance_records = [] 
         for model in self.models:
@@ -474,12 +478,13 @@ class My_training_class:
                 })
 
             plt.tight_layout()
+        if savefig:
             plt.savefig(f"{ckpt}/{model}_cm.png")
         performance_df = pd.DataFrame(performance_records)
         logging.info(f"Performance metrics dataframe created with shape: {performance_df.shape}")
         performance_df.to_csv(f"{ckpt}/performance.csv")
 
-    def generate_auroc(self):      
+    def generate_auroc(self, savefig=True):      
         for model in self.models:
             plt.figure(figsize=(8, 6))
             a_output = self.all_outputs[model]
@@ -501,8 +506,20 @@ class My_training_class:
             plt.title('ROC Curves for Multiple (Trait) Classifiers')
             plt.legend(loc="lower right")
             plt.grid(alpha=0.3)
-            plt.savefig(f'{ckpt}/{model}_auroc.png')
+            if savefig:
+                plt.savefig(f'{ckpt}/{model}_auroc.png')
             plt.show()
+
+    #TODO
+    def explain_SHAP(self, savefig=True):
+        import shap
+        shap.initjs()
+        explainer = shap.Explainer(self.lr_model, self.X_train)
+        shap_values = explainer(self.X_val)
+        shap.plots.beeswarm(shap_values)
+        if savefig:
+            plt.savefig('shap_beeswarm_plot.png', dpi=300, bbox_inches='tight')
+        plt.show()
 
     def begin_training(self):
         logging.info(f'Training started with {self.embedding_model} Embedding for {self.models}') #TODO preprocess only one time
