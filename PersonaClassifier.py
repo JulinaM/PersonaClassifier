@@ -565,11 +565,7 @@ if __name__ == "__main__":
             os.makedirs(ckpt)
         logging.basicConfig(filename=f'{ckpt}/log_{timestamp}.log', level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
        
-        my_train = My_training_class(filepath,
-            model_list=models,
-            embedding_model=emb,
-            demo=demo,
-            kFold=kFold)
+        my_train = My_training_class(filepath, model_list=models, embedding_model=emb, demo=demo, kFold=kFold)
         my_train.begin_training()
     except:
         traceback.print_exc()
