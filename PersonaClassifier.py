@@ -113,7 +113,7 @@ class DataProcessor:
         logging.info(f'VADER shape={df.shape}')
         return df
 
-    def post_clean_up(df):
+    def clean_up_text(df):
         logging.info(f'Before cleaning up: {df.shape}')
         def preprocess_text(text):
             text = text.lower()
@@ -302,24 +302,21 @@ class My_training_class:
         for model in model_list:
             self.all_outputs[model] = {}
 
-    def preprocess_data(self, main_file, liwc_file, is_mypersonality=True, is_preprocessed=False):
-        logging.info(f'Preprocessing {main_file}')
-        logging.info(10*' Dr. Julina Maharjan ')
-        if self.df is None:
-            if not is_preprocessed:
-                self.df = DataProcessor.read_data(main_file, liwc_file, is_mypersonality)
-                self.df = DataProcessor.process_NRC_emotion(self.df)
-                self.df = DataProcessor.process_NRC_VAD(self.df)
-                self.df = DataProcessor.process_VADER_sentiment(self.df)
-            else:
-                self.df = pd.read_csv(main_file)
-                logging.info(f"skipping extracting linguistic features: {self.df.shape}")
-            self.df = self.df[:2000] if self.demo else self.df
-            self.df =  DataProcessor.post_clean_up(self.df)
-            self.contextual_embeddings = DataProcessor.process_embeddings(self.df, self.embedding_model) if self.embedding_model else None
-            logging.info(f'Preprocessing Completed. Total shape={self.df.shape}')
-        else:
-            logging.info(f'Skipping Preprocessing. Total shape={self.df.shape}')
+    def process_raw_files(self, main_file, liwc_file, is_mypersonality=True):
+        logging.info(f"Reading RAW files: {main_file} and {liwc_file}, filetype: {is_mypersonality}")
+        self.df = DataProcessor.read_data(main_file, liwc_file, is_mypersonality)
+        self.df = DataProcessor.process_NRC_emotion(self.df)
+        self.df = DataProcessor.process_NRC_VAD(self.df)
+        self.df = DataProcessor.process_VADER_sentiment(self.df)
+        logging.info(f"Preprocessing RAW files completed: {self.df.shape}")
+
+    def preprocess_data(self):
+        logging.info(f'Preprocessing {self.filepath}')
+        self.df = pd.read_csv(self.filepath) if self.df is None else self.df
+        self.df = self.df[:2000] if self.demo else self.df
+        self.df =  DataProcessor.clean_up_text(self.df)
+        self.contextual_embeddings = DataProcessor.process_embeddings(self.df, self.embedding_model) if self.embedding_model else None
+        logging.info(f'Preprocessing Completed. Total shape={self.df.shape}')
 
     def prepare_dataset(self, target_col, test_size=0.1):
         all_cols = self.df.columns
@@ -522,9 +519,9 @@ class My_training_class:
         plt.show()
 
     def begin_training(self):
-        logging.info(f'Training started with {self.embedding_model} Embedding for {self.models}') #TODO preprocess only one time
-        self.preprocess_data(self.filepath, None, False, True)
-        # self.preprocess_data('data/mypersonality.csv', 'data/LIWC_mypersonality_oct_2.csv', True)
+        logging.info(f'Training started with {self.embedding_model} Embedding for {self.models}') 
+        # self.process_raw_files('data/mypersonality.csv', 'data/LIWC_mypersonality_oct_2.csv', True)
+        self.preprocess_data()
         logging.info(70*'>')
         for target_col in ['cOPN', 'cCON', 'cEXT', 'cAGR', 'cNEU']:
             logging.info(10*'-')
@@ -553,7 +550,6 @@ if __name__ == "__main__":
             'fb': 'data/mypersonality_processed_data_nov_27.csv',
             'both':'data/all_processed_train_data_nov_27.csv'
             }
-
         emb = emb_models[emb] if emb in emb_models.keys() else None
         models = ['lr', 'rf', 'xgb', 'mlp', 'bilstm'] if models == 'all' else ["mlp"]
         filepath = data_types[data_type] if data_type in data_types.keys() else None
