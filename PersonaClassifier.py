@@ -1,23 +1,22 @@
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-import re,os, glob, traceback, nltk
+import re,os, glob, traceback, nltk, logging, sys
+from datetime import datetime
 from collections import defaultdict
 import torch.optim as optim
 import torch.nn as nn
 from transformers import AutoTokenizer, AutoModel
 import torch
+import xgboost as xgb
 from sklearn.svm import SVC
 from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import RandomForestClassifier
-import xgboost as xgb
-from sklearn.preprocessing import StandardScaler
-from sklearn.model_selection import train_test_split
-from torch.utils.data import DataLoader, TensorDataset
+from sklearn.feature_selection import SelectFromModel, SelectKBest, f_classif, mutual_info_classif
 from sklearn.metrics import accuracy_score, confusion_matrix, ConfusionMatrixDisplay, precision_score, recall_score, f1_score, roc_curve, auc
-import logging, sys
-from datetime import datetime
-from sklearn.model_selection import KFold
+from sklearn.preprocessing import StandardScaler
+from sklearn.model_selection import train_test_split, kFold
+from torch.utils.data import DataLoader, TensorDataset
 global timestamp
 global ckpt 
 global logging
@@ -132,8 +131,15 @@ class DataProcessor:
         logging.info(f"After Dropping less than 3 words: {df.shape}")
         logging.info(f"Inserting mean value for null values.")
         num_cols = df.select_dtypes(include=['number']).columns
+        #Imputation
+        threshold_value = 0.8
+        df = df[df.columns[df.isnull().mean() < threshold_value]]         #Dropping columns with missing value rate higher than threshold
+        # df = df.loc[df.isnull().mean(axis=1) < threshold_value]        #Dropping rows with missing value rate higher than threshold
+        #Numerical Imputation
         # df.fillna(df.mean(), inplace=True)
+        # df.fillna(df.median(), implace=True)
         df[num_cols] = df[num_cols].fillna(df[num_cols].mean())
+        logging.info(f"After Clean up: {df.shape}")
         return df
 
     def process_embeddings(df, model_name, batch_size=8):
@@ -158,6 +164,40 @@ class DataProcessor:
             embeddings_list.append(cls_embeddings.cpu().numpy())
         logging.info(f'Embedding Completed for {model_name}')
         return np.vstack(embeddings_list)
+
+class FeatureSelection:
+    def default_selection(df, threshold=0.05):
+        from sklearn.feature_selection import VarianceThreshold
+        sel = VarianceThreshold(threshold=threshold)
+        X_selection = sel.fit_transform(df)
+        return X_selection
+
+    def mutual_info_selection(df, x_features, target_col, threshold=0.0001):
+        logging.info(f'Mutual Info Feature Selection. Threshold used: {threshold}')
+        from sklearn.feature_selection import mutual_info_classif, SelectKBest
+        X, y = df[x_features], df[target_col]
+        mutual_info = mutual_info_classif(X, y)
+        mutual_info = pd.Series(mutual_info)
+        mutual_info.index = X.columns
+        ig_df = pd.DataFrame({
+            'Feature': X.columns,
+            'Information Gain': mutual_info
+        }).sort_values(by='Information Gain', ascending=False)
+
+        selected_features = ig_df[ig_df['Information Gain'] > threshold]['Feature'].values
+        logging.info(f'selected_features: {selected_features}')
+        return X[selected_features]
+
+    def filter_selection(X, y):
+        selector = SelectKBest(score_func=mutual_info_classif, k=10)
+        selector.fit(X, y)
+        return X.columns[selector.get_support()]
+
+    def hybrid_selection(X, y):
+        logging.info(f'Hybrid method combining SelectFromModel and Logistic Regression')
+        selector = SelectFromModel(LogisticRegression(penalty="l2", C=0.1))
+        X_selected = selector.fit_transform(X, y)
+        return X.columns[selector.get_support()]
 
 class MLP(nn.Module):
     def __init__(self, input_size, hidden_size, output_size, dropout_rate=0.5):
@@ -323,12 +363,15 @@ class My_training_class:
         remove_cols = ['STATUS', 'original', 'cEXT','cNEU', 'cAGR', 'cCON', 'cOPN']
         emb_cols = ['bert_embeddings', 'berttweet_embeddings', 'xlnet_embeddings', 'roberta_embeddings']
         stat_cols = list (set(all_cols) - set(remove_cols) - set(emb_cols))
+
+        # selected_df = FeatureSelection.default_selection(self.df)
+        # selected_df = FeatureSelection.mutual_info_selection(self.df, stat_cols, target_col, 0.0005)
+        selected_features = FeatureSelection.hybrid_selection(self.df[stat_cols], self.df[target_col])
+        logging.info(f'selected Features: {selected_features}')
         scaler = StandardScaler() 
-        stat_features = self.df[stat_cols]
-        stat_features_scaled = scaler.fit_transform(stat_features)
+        stat_features_scaled = scaler.fit_transform(self.df[selected_features])
     
         X = np.concatenate([stat_features_scaled, self.contextual_embeddings] if self.contextual_embeddings is not None else [stat_features_scaled], axis=1)
-        # X = np.concatenate([self.contextual_embeddings] if self.contextual_embeddings is not None else [stat_features_scaled], axis=1)
         y = np.array(self.df[[target_col]]) 
         logging.info(f'statistical embedding: {stat_features_scaled.shape} ')
         logging.info(f'contextual embedding: {self.contextual_embeddings.shape if self.contextual_embeddings is not None else  []} ')
