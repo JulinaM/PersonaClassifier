@@ -1,0 +1,5 @@
+./data/*.csv
+./checkpoint/*
+./log/*
+./old/*
+./__pycache__/*

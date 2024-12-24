@@ -6,7 +6,7 @@ from datetime import datetime
 from collections import defaultdict
 import torch.optim as optim
 import torch.nn as nn
-from transformers import AutoTokenizer, AutoModel
+from transformers import AutoTokenizer, AutoModel, get_linear_schedule_with_warmup
 import torch
 import xgboost as xgb
 from sklearn.svm import SVC
@@ -15,7 +15,7 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.feature_selection import SelectFromModel, SelectKBest, f_classif, mutual_info_classif
 from sklearn.metrics import accuracy_score, confusion_matrix, ConfusionMatrixDisplay, precision_score, recall_score, f1_score, roc_curve, auc
 from sklearn.preprocessing import StandardScaler
-from sklearn.model_selection import train_test_split, kFold
+from sklearn.model_selection import train_test_split, KFold
 from torch.utils.data import DataLoader, TensorDataset
 global timestamp
 global ckpt 
@@ -172,10 +172,8 @@ class FeatureSelection:
         X_selection = sel.fit_transform(df)
         return X_selection
 
-    def mutual_info_selection(df, x_features, target_col, threshold=0.0001):
+    def mutual_info_selection(X, y, threshold=0.0001):
         logging.info(f'Mutual Info Feature Selection. Threshold used: {threshold}')
-        from sklearn.feature_selection import mutual_info_classif, SelectKBest
-        X, y = df[x_features], df[target_col]
         mutual_info = mutual_info_classif(X, y)
         mutual_info = pd.Series(mutual_info)
         mutual_info.index = X.columns
@@ -183,10 +181,7 @@ class FeatureSelection:
             'Feature': X.columns,
             'Information Gain': mutual_info
         }).sort_values(by='Information Gain', ascending=False)
-
-        selected_features = ig_df[ig_df['Information Gain'] > threshold]['Feature'].values
-        logging.info(f'selected_features: {selected_features}')
-        return X[selected_features]
+        return ig_df[ig_df['Information Gain'] > threshold]['Feature'].values
 
     def filter_selection(X, y):
         selector = SelectKBest(score_func=mutual_info_classif, k=10)
@@ -263,10 +258,12 @@ class BiLSTMClassifier(nn.Module):
 # output= model(input_data)
 # print(output.shape)  # Expected output: (batch_size, output_dim)
 
-def train_val_dl_models(model, train_loader, val_loader, max_grad_norm=1.0, epochs=16, lr=0.001):
-    logging.info(f'{model.__class__.__name__}')
+def train_val_dl_models(model, train_loader, val_loader, max_grad_norm=1.0, epochs=32, lr=0.0001):
+    logging.info(f'{model.__class__.__name__}; lr={lr}')
     criterion = nn.BCEWithLogitsLoss()  
-    optimizer = optim.Adam(model.parameters(), lr=lr)
+    optimizer = optim.Adam(model.parameters(), lr=lr, momentum=0.9)
+    total_steps = len(train_loader) * epochs
+    scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=0, num_training_steps=total_steps)
     for epoch in range(epochs):
         model.train()
         total_loss = 0.0
@@ -277,6 +274,7 @@ def train_val_dl_models(model, train_loader, val_loader, max_grad_norm=1.0, epoc
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
             loss.backward()
             optimizer.step()
+            scheduler.step()
             total_loss += loss.item()
         model.eval()  
         val_preds, val_labels, val_scores, val_loss = [], [], [], 0
@@ -341,6 +339,7 @@ class My_training_class:
         self.all_outputs= {}
         for model in model_list:
             self.all_outputs[model] = {}
+        self.traits = ['cOPN', 'cCON', 'cEXT', 'cAGR', 'cNEU']
 
     def process_raw_files(self, main_file, liwc_file, is_mypersonality=True):
         logging.info(f"Reading RAW files: {main_file} and {liwc_file}, filetype: {is_mypersonality}")
@@ -365,8 +364,8 @@ class My_training_class:
         stat_cols = list (set(all_cols) - set(remove_cols) - set(emb_cols))
 
         # selected_df = FeatureSelection.default_selection(self.df)
-        # selected_df = FeatureSelection.mutual_info_selection(self.df, stat_cols, target_col, 0.0005)
-        selected_features = FeatureSelection.hybrid_selection(self.df[stat_cols], self.df[target_col])
+        selected_features = FeatureSelection.mutual_info_selection(self.df[stat_cols], self.df[target_col], 0.001)
+        # selected_features = FeatureSelection.hybrid_selection(self.df[stat_cols], self.df[target_col])
         logging.info(f'selected Features: {selected_features}')
         scaler = StandardScaler() 
         stat_features_scaled = scaler.fit_transform(self.df[selected_features])
@@ -526,6 +525,10 @@ class My_training_class:
         performance_df = pd.DataFrame(performance_records)
         logging.info(f"Performance metrics dataframe created with shape: {performance_df.shape}")
         performance_df.to_csv(f"{ckpt}/performance.csv")
+        for col in self.traits:
+            s = performance_df[performance_df['Classifier'] ==col]
+            best_model_row = s.loc[s['Accuracy'].idxmax()]
+            logging.info(f'For {best_model_row["Classifier"]}, {best_model_row["Model"]},  {best_model_row["Accuracy"]}')
 
     def generate_auroc(self, savefig=True):      
         for model in self.models:
@@ -546,7 +549,7 @@ class My_training_class:
             plt.ylim([0.0, 1.05])
             plt.xlabel('False Positive Rate')
             plt.ylabel('True Positive Rate')
-            plt.title('ROC Curves for Multiple (Trait) Classifiers')
+            plt.title(f'ROC Curves for Multiple (Trait) Classifiers using {model}')
             plt.legend(loc="lower right")
             plt.grid(alpha=0.3)
             if savefig:
@@ -569,7 +572,7 @@ class My_training_class:
         # self.process_raw_files('data/mypersonality.csv', 'data/LIWC_mypersonality_oct_2.csv', True)
         self.preprocess_data()
         logging.info(70*'>')
-        for target_col in ['cOPN', 'cCON', 'cEXT', 'cAGR', 'cNEU']:
+        for target_col in self.traits:
             logging.info(10*'-')
             logging.info(f'Trait: {target_col}')
             logging.info(10*'-')
@@ -603,7 +606,7 @@ if __name__ == "__main__":
         
         ## Initializing log
         timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
-        ckpt = f"checkpoint/{emb.split('-')[0]}-{timestamp}" if emb else f"checkpoint/{timestamp}"
+        ckpt = f"checkpoint/{emb.split('-')[0]}-{timestamp}_{data_type}" if emb else f"checkpoint/{timestamp}"
         if not os.path.exists(ckpt):
             os.makedirs(ckpt)
         logging.basicConfig(filename=f'{ckpt}/log_{timestamp}.log', level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
