@@ -9,59 +9,14 @@ from sklearn.preprocessing import StandardScaler
 from torch.utils.data import DataLoader, TensorDataset
 from utils.DataProcessor import FeatureSelection, PreProcessor
 from utils.Visualization import generate_cm, generate_auroc
-from utils.Models import train_val_dl_models
-
+from utils.Models import train_val_dl_models, MLP
+import xgboost as xgb
+from sklearn.svm import SVC
+from sklearn.linear_model import LogisticRegression
+from sklearn.ensemble import RandomForestClassifier
 global timestamp
 global ckpt 
 global logging
-
-class MLP(nn.Module):
-    def __init__(self, input_size, hidden_size, output_size, dropout_rate=0.5):
-        super(MLP, self).__init__()
-        self.fc1 = nn.Linear(input_size, hidden_size)
-        self.relu = nn.ReLU()
-        self.fc2 = nn.Linear(hidden_size, hidden_size)
-        self.fc3 = nn.Linear(hidden_size, hidden_size)
-        self.fc4 = nn.Linear(hidden_size, output_size)
-        self.dropout = nn.Dropout(dropout_rate)
-        
-    def forward(self, x):
-        x = self.fc1(x)
-        x = self.relu(x)
-        x = self.dropout(x)
-        x = self.fc2(x)
-        x = self.relu(x)
-        x = self.dropout(x)
-        x = self.fc3(x)
-        x = self.relu(x)
-        x = self.dropout(x)
-        x = self.fc4(x)
-        return x
-
-class BiLSTMClassifier(nn.Module):
-    def __init__(self, input_dim, hidden_dim, output_dim, num_layers, bidirectional=True, do_attention=True, dropout_rate=0.5):
-        super(BiLSTMClassifier, self).__init__()
-        self.do_attention = do_attention
-        self.attention = DotProductAttention(hidden_dim)
-        self.lstm = nn.LSTM(input_dim, hidden_dim, num_layers, bidirectional=bidirectional, batch_first=True, dropout=dropout_rate)
-        self.fc = nn.Linear(hidden_dim * 2 if bidirectional else hidden_dim, output_dim)
-        self.layer_norm1 = nn.LayerNorm(input_dim) 
-        self.layer_norm2 = nn.LayerNorm(hidden_dim * 2)  
-        self.dropout = nn.Dropout(dropout_rate)  
-    def forward(self, x):
-        if len(x.size()) == 2:
-            x = x.unsqueeze(1)  
-        if self.do_attention:
-            context_vector, attention_weights = self.attention(x)
-            context_vector = self.layer_norm1(context_vector)
-        else:
-            context_vector = x
-        lstm_output, _ = self.lstm(context_vector)     
-        lstm_output = self.layer_norm2(lstm_output)
-        last_hidden_state = lstm_output[:, -1, :]  # Shape: (batch_size, hidden_dim * 2)
-        last_hidden_state = self.dropout(last_hidden_state)
-        output = self.fc(last_hidden_state)  
-        return output
 
 class Dataset:
     def __init__(self, filepath, emb_model, targets, demo):
@@ -71,10 +26,9 @@ class Dataset:
         self.contextual_emb = PreProcessor.process_embeddings(df, emb_model) if emb_model else []
         self.X = df.drop(['Unnamed: 0', 'STATUS'] + targets, axis=1)
         self.Y = df[targets]
-        logging.info(f'X Shape: {self.X.shape} , Y Shape: {self.Y.shape}  Robert Emb Shape: {self.contextual_emb.shape}')
+        logging.info(f'X Shape: {self.X.shape}, Y Shape: {self.Y.shape},  Contextual Emb Shape: {self.contextual_emb.shape}')
 
-
-class My_training_class:
+class My_training:
     def __init__(self, model_list=None, emb_model=None, demo=True,traits=None, ):
         self.models = model_list if model_list else ['svm', 'lr', 'rf', 'xgb', 'bilstm', 'mlp']
         self.emb_model = emb_model
@@ -155,35 +109,39 @@ class My_training_class:
                 logging.info(f'RF Val Acc: {rf_accuracy:.2f}')
             elif model == 'xgb': 
                 self.xgb_model.fit(X_train, y_train)
-                # self.xgb_model.save_model(f"{ckpt}/{self.xgb_model.__class__.__name__}_{target_col}.json")
                 xgb_y_pred = self.xgb_model.predict(X_val)
                 xgb_y_proba = self.xgb_model.predict_proba(X_val)[:, 1]
                 xgb_accuracy = accuracy_score(y_val, xgb_y_pred)
                 self.all_outputs[model][target_col] = (y_val, xgb_y_pred, xgb_y_proba)
                 logging.info(f'SGBoost Val Acc: {xgb_accuracy:.2f}')
+                # self.xgb_model.save_model(f"{ckpt}/{self.xgb_model.__class__.__name__}_{target_col}.json")
             elif model == 'bilstm':   
                 train_loader = self.get_tensor(X_train, y_train)
                 val_loader = self.get_tensor(X_val, y_val)
-                self.bilstm_acc, y_pred, y_scores = train_val_dl_models(self.bilstm_model, train_loader, val_loader)
-                self.all_outputs[model][target_col] = (y_val, y_pred, y_scores)
+                bilstm_acc, y_pred, y_probas = train_val_dl_models(self.bilstm_model, train_loader, val_loader)
+                self.all_outputs[model][target_col] = (y_val, y_pred, y_probas)
+                logging.info(f'BILSTM Val Acc: {bilstm_acc:.2f}')
                 torch.save(self.bilstm_model.state_dict(), f"{ckpt}/{self.bilstm_model.__class__.__name__}_{target_col}.pth")
             elif model == 'mlp':  
                 train_loader = self.get_tensor(X_train, y_train)
                 val_loader = self.get_tensor(X_val, y_val)  
-                self.mlp_acc, y_pred, y_scores = train_val_dl_models(self.mlp_model, train_loader, val_loader)
-                self.all_outputs[model][target_col] = (y_val, y_pred, y_scores)
-                torch.save(self.mlp_model.state_dict(), f"{ckpt}/{self.mlp_model.__class__.__name__}_{target_col}.pth")
+                mlp_acc, y_pred, y_probas = train_val_dl_models(self.mlp_model, train_loader, val_loader)
+                self.all_outputs[model][target_col] = (y_val, y_pred, y_probas)
+                logging.info(f'MLP Val Acc: {mlp_acc:.2f}')
+                # torch.save(self.mlp_model.state_dict(), f"{ckpt}/{self.mlp_model.__class__.__name__}_{target_col}.pth")
+        logging.info(f'Model Fitted.')
 
     def display_metrics(self, savefig=True):
+        logging.info(f'Generating Metrics and Figures.')
         performance_records = {} 
         for model in self.models:
             logging.info(15*'='+f" {model} "+ 15*'=')
             a_output = self.all_outputs[model]
-            results = performance_records = generate_cm(a_output, model, ckpt, True)
+            performance_records[model] = generate_cm(a_output, model, ckpt, True)
             generate_auroc(a_output, model, ckpt, True)
-        # performance_df = pd.DataFrame(performance_records)
-        # logging.info(f"Performance metrics dataframe created with shape: {performance_df.shape}")
-        # performance_df.to_csv(f"{ckpt}/performance.csv")
+        performance_df = pd.DataFrame(performance_records)
+        logging.info(f"Performance metrics shape: {performance_df.shape}")
+        performance_df.to_csv(f"{ckpt}/performance.csv")
         # # for col in self.traits:
         #     s = performance_df[performance_df['Classifier'] ==col]
         #     best_model_row = s.loc[s['Accuracy'].idxmax()]
@@ -196,7 +154,7 @@ if __name__ == "__main__":
         print(emb, models)
         emb_models = {'1':'roberta-base', '2':'bert-base-uncased', '3':'vinai/bertweet-base', '4':'xlnet-base-cased'}
         emb = emb_models[emb] if emb in emb_models.keys() else None
-        models = ['lr', 'rf', 'xgb', 'mlp', 'bilstm'] if models == 'all' else ["mlp"]
+        models = ['lr', 'rf', 'xgb', 'mlp', 'bilstm'] if models == 'all' else ["xgb"]
         print(emb, models)
 
         timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
@@ -205,7 +163,8 @@ if __name__ == "__main__":
             os.makedirs(ckpt)
         logging.basicConfig(filename=f'{ckpt}/log_{timestamp}.log', level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
        
-        my_train = My_training_class(model_list=models, emb_model=emb, demo=None)
+        logging.info(f'Training started: {emb} {models} ')
+        my_train = My_training(model_list=models, emb_model=emb, demo=None)
         my_train.read_dataset('./processed_data/pandora_train.csv', './processed_data/pandora_val.csv')
         logging.info(30*"*")
         for target_col in my_train.traits:
@@ -214,12 +173,8 @@ if __name__ == "__main__":
             logging.info(10*"-")
             selected_features = my_train.select_features(target_col)
             logging.info(f'Selected Features for {target_col} : {selected_features}')
-            X_train, y_train = my_train.prepare_dataset(my_train.train_set.X[selected_features],
-                my_train.train_set.contextual_emb, 
-                my_train.train_set.Y[[target_col]])
-            X_val, y_val = my_train.prepare_dataset(my_train.val_set.X[selected_features], 
-                my_train.val_set.contextual_emb, 
-                my_train.val_set.Y[[target_col]])
+            X_train, y_train = my_train.prepare_dataset(my_train.train_set.X[selected_features], my_train.train_set.contextual_emb, my_train.train_set.Y[[target_col]])
+            X_val, y_val = my_train.prepare_dataset(my_train.val_set.X[selected_features], my_train.val_set.contextual_emb, my_train.val_set.Y[[target_col]])
             my_train.init_models(X_shape=X_train.shape[1])
             my_train.fit_models(X_train, y_train, X_val, y_val, target_col)
             logging.info(30*"*")
