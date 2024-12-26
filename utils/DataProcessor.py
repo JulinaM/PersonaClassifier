@@ -9,9 +9,6 @@ import torch
 from sklearn.model_selection import train_test_split, KFold
 from sklearn.feature_selection import SelectFromModel, SelectKBest, f_classif, mutual_info_classif, VarianceThreshold
 
-# timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
-# logging.basicConfig(filename=f'../log/DataProcessor_log_{timestamp}.log', level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-
 class PreProcessor:
     def read_data(main_file, liwc_file, is_mypersonality=True):
         if is_mypersonality:
@@ -39,7 +36,7 @@ class PreProcessor:
         return df
 
     def process_NRC_VAD(df):
-        nrc_vad = pd.read_csv('../data/NRC-VAD-Lexicon/NRC-VAD-Lexicon.csv', sep="\t")  
+        nrc_vad = pd.read_csv('data/NRC-VAD-Lexicon/NRC-VAD-Lexicon.csv', sep="\t")  
         nrc_vad_dict = nrc_vad.set_index('Word').to_dict(orient='index')
         def get_vad_scores(text):
             words = text.split()
@@ -66,7 +63,7 @@ class PreProcessor:
         return df
 
     def process_NRC_emotion(df):
-        nrc_lexicon = pd.read_csv('../data/NRC-Emotion-Lexicon/NRC-Emotion-Lexicon-Wordlevel-v0.92.txt', names=["word", "emotion", "association"],sep="\t", header=None)
+        nrc_lexicon = pd.read_csv('data/NRC-Emotion-Lexicon/NRC-Emotion-Lexicon-Wordlevel-v0.92.txt', names=["word", "emotion", "association"],sep="\t", header=None)
         # Filter out words that have no association with emotions (association == 0)
         nrc_lexicon = nrc_lexicon[nrc_lexicon['association'] == 1]
         # nrc_lexicon.drop(columns=['association'], inplace=True)
@@ -192,6 +189,10 @@ class FeatureSelection:
 
 if __name__ == "__main__":
     try:
+
+        timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
+        logging.basicConfig(filename=f'log/DataProcessor_log_{timestamp}.log', level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
         main_file = "../data/pandora_to_big5.csv"
         liwc_file = "../data/LIWC_pandora_to_big5_oct_24.csv"
         logging.info(f"Reading RAW files: {main_file} and {liwc_file}")

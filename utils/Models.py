@@ -5,35 +5,25 @@ import torch.optim as optim
 import torch.nn as nn
 from transformers import AutoTokenizer, AutoModel, get_linear_schedule_with_warmup
 import torch
-import xgboost as xgb
-from sklearn.svm import SVC
-from sklearn.linear_model import LogisticRegression
-from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import accuracy_score
 from sklearn.model_selection import train_test_split, KFold
 from torch.utils.data import DataLoader, TensorDataset
 
 class MLP(nn.Module):
-    def __init__(self, input_size, hidden_size, output_size, dropout_rate=0.5):
+    def __init__(self, input_size, hidden_size, output_size, dropout_rate=0.3):
         super(MLP, self).__init__()
         self.fc1 = nn.Linear(input_size, hidden_size)
         self.relu = nn.ReLU()
-        self.fc2 = nn.Linear(hidden_size, hidden_size)
-        self.fc3 = nn.Linear(hidden_size, hidden_size)
-        self.fc4 = nn.Linear(hidden_size, output_size)
         self.dropout = nn.Dropout(dropout_rate)
+        self.fc2 = nn.Linear(hidden_size, output_size)
+        self.sigmoid =  nn.Sigmoid()
         
     def forward(self, x):
         x = self.fc1(x)
         x = self.relu(x)
         x = self.dropout(x)
         x = self.fc2(x)
-        x = self.relu(x)
-        x = self.dropout(x)
-        x = self.fc3(x)
-        x = self.relu(x)
-        x = self.dropout(x)
-        x = self.fc4(x)
+        x = self.sigmoid(x)
         return x
 
 class DotProductAttention(nn.Module):
@@ -56,6 +46,7 @@ class BiLSTMClassifier(nn.Module):
         self.layer_norm1 = nn.LayerNorm(input_dim) 
         self.layer_norm2 = nn.LayerNorm(hidden_dim * 2)  
         self.dropout = nn.Dropout(dropout_rate)  
+        self.sigmoid =  nn.Sigmoid()
     def forward(self, x):
         if len(x.size()) == 2:
             x = x.unsqueeze(1)  
@@ -69,6 +60,7 @@ class BiLSTMClassifier(nn.Module):
         last_hidden_state = lstm_output[:, -1, :]  # Shape: (batch_size, hidden_dim * 2)
         last_hidden_state = self.dropout(last_hidden_state)
         output = self.fc(last_hidden_state)  
+        output = self.sigmoid(output)
         return output
 
 # # Test model Initialize model
@@ -83,6 +75,7 @@ def train_val_dl_models(model, train_loader, val_loader, max_grad_norm=1.0, epoc
     optimizer = optim.Adam(model.parameters(), lr=lr)
     total_steps = len(train_loader) * epochs
     scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=0, num_training_steps=total_steps)
+    history = {}
     for epoch in range(epochs):
         model.train()
         total_loss = 0.0
@@ -96,21 +89,24 @@ def train_val_dl_models(model, train_loader, val_loader, max_grad_norm=1.0, epoc
             scheduler.step()
             total_loss += loss.item()
         model.eval()  
-        val_preds, val_labels, val_scores, val_loss = [], [], [], 0
+        val_labels, val_probas, val_loss = [], [], 0
         with torch.no_grad():  
             for inputs, labels in val_loader:
                 outputs= model(inputs)
                 val_loss += criterion(outputs.squeeze(), labels).item()  
-                val_preds.append(torch.sigmoid(outputs))  
+                val_probas.append(outputs)  
                 val_labels.append(labels) 
-                val_scores.append(outputs)
-        val_preds = torch.cat(val_preds)
+        val_probas = torch.cat(val_probas)
         val_labels = torch.cat(val_labels)
-        val_preds = (val_preds > 0.5).float() 
+        val_preds = (val_probas > 0.5).float() 
         val_accuracy = accuracy_score(val_labels.numpy(), val_preds.numpy())
         if epoch % 4 == 0:
+            # history['val_acc'] = val_accuracy
+            # history['val_loss'] = val_loss
+            # # history['train_acc'] = val_accuracy
+            # history['train_loss'] = total_loss
             logging.info(f'Epoch [{epoch + 1}/{epochs}], Train Loss: {total_loss / len(train_loader):.4f}, 'f'Val Loss: {val_loss / len(val_loader):.4f}, Val Accuracy: {val_accuracy:.4f}')
-    return val_accuracy, val_preds, torch.cat(val_scores)
+    return val_accuracy, val_preds, val_probas
 
 def k_fold_train_val_dl_models(model, dataset, k=5, batch_size=32, max_grad_norm=1.0, epochs=16, lr=0.001):
     """
@@ -139,7 +135,7 @@ def k_fold_train_val_dl_models(model, dataset, k=5, batch_size=32, max_grad_norm
         train_loader = torch.utils.data.DataLoader(train_subset, batch_size=batch_size, shuffle=True)
         val_loader = torch.utils.data.DataLoader(val_subset, batch_size=batch_size)
 
-        val_accuracy, val_preds, val_scores = train_single_fold(model, train_loader=train_loader, val_loader=val_loader, max_grad_norm=max_grad_norm, epochs=epochs, lr=lr)
+        val_accuracy, val_preds, val_probas = train_single_fold(model, train_loader=train_loader, val_loader=val_loader, max_grad_norm=max_grad_norm, epochs=epochs, lr=lr)
         fold_results.append(val_accuracy)
         logging.info(f"Fold {fold + 1} Accuracy: {val_accuracy:.4f}")
 
