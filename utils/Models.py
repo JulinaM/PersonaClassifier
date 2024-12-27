@@ -16,14 +16,14 @@ class MLP(nn.Module):
         self.relu = nn.ReLU()
         self.dropout = nn.Dropout(dropout_rate)
         self.fc2 = nn.Linear(hidden_size, output_size)
-        self.sigmoid =  nn.Sigmoid()
+        # self.sigmoid =  nn.Sigmoid()
         
     def forward(self, x):
         x = self.fc1(x)
         x = self.relu(x)
         x = self.dropout(x)
         x = self.fc2(x)
-        x = self.sigmoid(x)
+        # x = self.sigmoid(x)
         return x
 
 class DotProductAttention(nn.Module):
@@ -69,44 +69,58 @@ class BiLSTMClassifier(nn.Module):
 # output= model(input_data)
 # print(output.shape)  # Expected output: (batch_size, output_dim)
 
-def train_val_dl_models(model, train_loader, val_loader, max_grad_norm=1.0, epochs=16, lr=0.001):
-    logging.info(f'{model.__class__.__name__}; lr={lr}')
+def get_tensor(X, y, batch_size, shuffle):
+    logging.info(f'Batch size: {batch_size}, shuffle: {shuffle}')
+    X_tensor = torch.tensor(X, dtype=torch.float32)
+    y_tensor = torch.tensor(y, dtype=torch.float32)
+    dataset = TensorDataset(X_tensor, y_tensor)
+    return DataLoader(dataset, batch_size=batch_size, shuffle=shuffle)
+
+def train_val_dl_models(model, X_train, y_train, X_val, y_val,  batch_size=32, epochs=16, lr=0.001, max_grad_norm=1.0):
+    logging.info(f'{model.__class__.__name__}; lr={lr}, batch_size={batch_size}')
     criterion = nn.BCEWithLogitsLoss()  
+    # criterion = nn.BCELoss()  
     optimizer = optim.Adam(model.parameters(), lr=lr)
-    total_steps = len(train_loader) * epochs
-    scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=0, num_training_steps=total_steps)
-    history = {}
+
+    train_loader = get_tensor(X_train, y_train, batch_size=batch_size, shuffle=True)
+    val_loader = get_tensor(X_val, y_val, batch_size=batch_size, shuffle=False)
+    
     for epoch in range(epochs):
         model.train()
-        total_loss = 0.0
-        for t, labels in train_loader:
+        correct, train_loss = 0, 0.0
+        for input, target in train_loader:
             optimizer.zero_grad()  
-            outputs= model(t)
-            loss = criterion(outputs.squeeze(), labels)
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
+            output = model(input)
+            loss = criterion(output, target.unsqueeze(1))
             loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
             optimizer.step()
-            scheduler.step()
-            total_loss += loss.item()
+            train_loss += loss.item()
+            probs = torch.sigmoid(output)
+            pred = (probs > 0.5).float() 
+            correct += pred.eq(target.view_as(pred)).sum().item()
+        train_loss /=len(train_loader)
+        train_accuracy =  correct / len(train_loader.dataset)
+
+        val_preds, val_probas, val_targets = [], [], []
+        correct, val_loss = 0,  0.0
         model.eval()  
-        val_labels, val_probas, val_loss = [], [], 0
         with torch.no_grad():  
-            for inputs, labels in val_loader:
-                outputs= model(inputs)
-                val_loss += criterion(outputs.squeeze(), labels).item()  
-                val_probas.append(outputs)  
-                val_labels.append(labels) 
-        val_probas = torch.cat(val_probas)
-        val_labels = torch.cat(val_labels)
-        val_preds = (val_probas > 0.5).float() 
-        val_accuracy = accuracy_score(val_labels.numpy(), val_preds.numpy())
+            for input, target in val_loader:
+                output = model(input)
+                val_loss += criterion(output, target.unsqueeze(1)).item()  
+                probs = torch.sigmoid(output) 
+                pred = (probs > 0.5).float() 
+                correct += pred.eq(target.view_as(pred)).sum().item()
+                val_probas.append(probs)  
+                val_preds.append(pred)
+                val_targets.append(target)
+        val_loss /= len(val_loader)
+        val_accuracy = correct / len(val_loader.dataset)
+        val_acc = accuracy_score(torch.cat(val_targets).numpy(), torch.cat(val_preds).numpy())
         if epoch % 4 == 0:
-            # history['val_acc'] = val_accuracy
-            # history['val_loss'] = val_loss
-            # # history['train_acc'] = val_accuracy
-            # history['train_loss'] = total_loss
-            logging.info(f'Epoch [{epoch + 1}/{epochs}], Train Loss: {total_loss / len(train_loader):.4f}, 'f'Val Loss: {val_loss / len(val_loader):.4f}, Val Accuracy: {val_accuracy:.4f}')
-    return val_accuracy, val_preds, val_probas
+            logging.info(f'Epoch: [{epoch + 1}/{epochs}], Train accuracy:{train_accuracy:.4f}, Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}, Val Accuracy: {val_accuracy:.4f},  Val_Acc: {val_acc} ')
+    return val_accuracy, torch.cat(val_preds), torch.cat(val_probas)
 
 def k_fold_train_val_dl_models(model, dataset, k=5, batch_size=32, max_grad_norm=1.0, epochs=16, lr=0.001):
     """
