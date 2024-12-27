@@ -12,7 +12,7 @@ def generate_auroc(a_output, model, ckpt, savefig=True):
         youden_index = tpr - fpr
         optimal_idx = youden_index.argmax()
         optimal_threshold = thresholds[optimal_idx]
-        logging.info(f"Optimal Threshold: {model}: {optimal_threshold}")
+        logging.info(f"Optimal Threshold: {model}:{trait}: {optimal_threshold}")
         roc_auc = auc(fpr, tpr)
         plt.plot(fpr, tpr, lw=2, label=f'{trait} (AUC = {roc_auc:.2f})')
     plt.plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--', label="Random Guessing")

@@ -9,7 +9,7 @@ from sklearn.preprocessing import StandardScaler
 from torch.utils.data import DataLoader, TensorDataset
 from utils.DataProcessor import FeatureSelection, PreProcessor
 from utils.Visualization import generate_cm, generate_auroc
-from utils.Models import train_val_dl_models, MLP
+from utils.Models import train_val_dl_models, train_with_kfold_val_dl_models, MLP
 import xgboost as xgb
 from sklearn.svm import SVC
 from sklearn.linear_model import LogisticRegression
@@ -38,13 +38,12 @@ class My_training:
         for model in model_list:
             self.all_outputs[model] = {}
     
-    def read_dataset(self, train_file, val_file):
-        self.train_set = Dataset(train_file, self.emb_model, self.traits, self.demo)    
-        self.val_set = Dataset(val_file, self.emb_model, self.traits, self.demo)   
-        return self.train_set, self.val_set
+    # def read_dataset(self, train_file, val_file):
+    #     self.train_set = Dataset(train_file, self.emb_model, self.traits, self.demo)    
+    #     self.val_set = Dataset(val_file, self.emb_model, self.traits, self.demo)   
+    #     return self.train_set, self.val_set
 
-    def select_features(self, target_col):
-        X, y = self.train_set.X, self.train_set.Y[[target_col]] 
+    def select_features(self, X, y):
         return FeatureSelection.mutual_info_selection(X, y)
         
     def prepare_dataset(self, stat_df, emb_df, y_df):
@@ -71,7 +70,7 @@ class My_training:
             elif model == 'xgb':
                 self.xgb_model = xgb.XGBClassifier(n_estimators=100, learning_rate=0.1, max_depth=6, random_state=42)
             elif model == 'bilstm':   
-                self.bilstm_model = BiLSTMClassifier(input_dim= X_shape, hidden_dim=128, output_dim=1, num_layers=2, bidirectional=True, do_attention=True, dropout_rate=0.5)
+                self.bilstm_model = BiLSTMClassifier(input_dim=X_shape, hidden_dim=128, output_dim=1, num_layers=2, bidirectional=True, do_attention=True, dropout_rate=0.5)
             elif model == 'mlp':  
                 self.mlp_model = MLP(input_size=X_shape, hidden_size=128, output_size=1, dropout_rate=0.3)
         logging.info(f'Model Initiated.')
@@ -136,15 +135,51 @@ class My_training:
         #     best_model_row = s.loc[s['Accuracy'].idxmax()]
         #     logging.info(f'For {best_model_row["Classifier"]}, {best_model_row["Model"]},  {best_model_row["Accuracy"]}')
 
+def kfold_train(emb, models, demo):
+    logging.info(f'K-Fold Training started: {emb} {models} {demo}')
+    my_train = My_training(model_list=models, emb_model=emb, demo=demo)
+    dataset = Dataset('./processed_data/pandora_train.csv', my_train.emb_model, my_train.traits, my_train.demo)    
+    logging.info(50*"*")
+    for target_col in my_train.traits:
+        logging.info(f'{10*"-"} {target_col} {10*"-"}')
+        selected_features = my_train.select_features(dataset.X, dataset.Y[[target_col]])
+        logging.info(f'Selected Features for {target_col} : {selected_features}')
+        X, y = my_train.prepare_dataset(dataset.X[selected_features], dataset.contextual_emb, dataset.Y[[target_col]])
+        mlp_model = MLP(input_size=X.shape[1], hidden_size=128, output_size=1, dropout_rate=0.3)
+        mlp_acc, y_pred, y_probas, y_val = train_with_kfold_val_dl_models(mlp_model, X, y)
+        my_train.all_outputs['mlp'][target_col] = (y_val, y_pred, y_probas)
+    my_train.display_metrics()
+
+def train(emb, models, demo):
+    logging.info(f'Training started: {emb} {models} {demo}')
+    my_train = My_training(model_list=models, emb_model=emb, demo=demo)
+    train_set = Dataset('./processed_data/pandora_train.csv', my_train.emb_model, my_train.traits, my_train.demo)   
+    val_set = Dataset('./processed_data/pandora_val.csv', my_train.emb_model, my_train.traits, my_train.demo)    
+ 
+    logging.info(50*"*")
+    for target_col in my_train.traits:
+        logging.info(f'{10*"-"} {target_col} {10*"-"}')
+        selected_features = my_train.select_features(train_set.X, train_set.Y[[target_col]] )
+        logging.info(f'Selected Features for {target_col} : {selected_features}')
+        X_train, y_train = my_train.prepare_dataset(train_set.X[selected_features], train_set.contextual_emb, train_set.Y[[target_col]])
+        X_val, y_val = my_train.prepare_dataset(val_set.X[selected_features], val_set.contextual_emb, val_set.Y[[target_col]])
+        my_train.init_models(X_shape=X_train.shape[1])
+        my_train.fit_models(X_train, y_train, X_val, y_val, target_col, save_ckpt=False)
+        logging.info(50*"-")
+    my_train.display_metrics()
+
+    
 if __name__ == "__main__":
     try:
         emb = sys.argv[1]
         models = sys.argv[2]
-        print(emb, models)
+        kfold = True #sys.argv[3]
+        demo = None
+        print(emb, models, kfold, demo)
         emb_models = {'1':'roberta-base', '2':'bert-base-uncased', '3':'vinai/bertweet-base', '4':'xlnet-base-cased'}
         emb = emb_models[emb] if emb in emb_models.keys() else None
         models = ['lr', 'rf', 'xgb', 'mlp', 'bilstm'] if models == 'all' else [ 'mlp']
-        print(emb, models)
+        print(emb, models, kfold, demo)
 
         timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
         ckpt = f"checkpoint/{emb.split('-')[0]}-{timestamp}" if emb else f"checkpoint/{timestamp}"
@@ -152,21 +187,9 @@ if __name__ == "__main__":
             os.makedirs(ckpt)
         logging.basicConfig(filename=f'{ckpt}/log_{timestamp}.log', level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
        
-        logging.info(f'Training started: {emb} {models} ')
-        my_train = My_training(model_list=models, emb_model=emb, demo=None)
-        my_train.read_dataset('./processed_data/pandora_train.csv', './processed_data/pandora_val.csv')
-        logging.info(50*"*")
-        for target_col in my_train.traits:
-            logging.info(f'{10*"-"} {target_col} {10*"-"}')
-            selected_features = my_train.select_features(target_col)
-            logging.info(f'Selected Features for {target_col} : {selected_features}')
-            X_train, y_train = my_train.prepare_dataset(my_train.train_set.X[selected_features], my_train.train_set.contextual_emb, my_train.train_set.Y[[target_col]])
-            X_val, y_val = my_train.prepare_dataset(my_train.val_set.X[selected_features], my_train.val_set.contextual_emb, my_train.val_set.Y[[target_col]])
-            my_train.init_models(X_shape=X_train.shape[1])
-            my_train.fit_models(X_train, y_train, X_val, y_val, target_col, save_ckpt=False)
-            logging.info(50*"-")
-        my_train.display_metrics()
-        
+        if kfold: kfold_train(emb, models, demo)
+        else: train(emb, models, demo)
+
     except:
         traceback.print_exc()
         print("missing arguments!!!!")
