@@ -50,8 +50,7 @@ class My_training:
     def prepare_dataset(self, stat_df, emb_df, y_df):
         # logging.info(f'{stat_df.shape}, {y_df.shape}, {emb_df.shape}')
         scaler = StandardScaler() 
-        stat_features_scaled = scaler.fit_transform(stat_df)
-
+        stat_features_scaled = scaler.fit_transform(stat_df) #TODO experiment with other tranformation like log
         X = np.concatenate([stat_features_scaled, emb_df], axis=1)
         y = np.array(y_df) 
         y = y.ravel()  
@@ -60,12 +59,6 @@ class My_training:
         logging.info(f'total embedding X and y: {X.shape} and {y.shape}')
         logging.info(f'Data Preparation Completed.')
         return X, y
-
-    def get_tensor(self, X, y, batch_size=16, shuffle=True):
-        X_tensor = torch.tensor(X, dtype=torch.float32)
-        y_tensor = torch.tensor(y, dtype=torch.float32)
-        dataset = TensorDataset(X_tensor, y_tensor)
-        return DataLoader(dataset, batch_size=batch_size, shuffle=shuffle)
 
     def init_models(self, X_shape):
         for model in self.models:
@@ -83,7 +76,7 @@ class My_training:
                 self.mlp_model = MLP(input_size=X_shape, hidden_size=128, output_size=1, dropout_rate=0.3)
         logging.info(f'Model Initiated.')
     
-    def fit_models(self, X_train, y_train, X_val, y_val, target_col):
+    def fit_models(self, X_train, y_train, X_val, y_val, target_col, save_ckpt=False):
         logging.info(f'Fitting and Validating Models...')
         for model in self.models:
             if model =='svm':
@@ -114,21 +107,17 @@ class My_training:
                 xgb_accuracy = accuracy_score(y_val, xgb_y_pred)
                 self.all_outputs[model][target_col] = (y_val, xgb_y_pred, xgb_y_proba)
                 logging.info(f'SGBoost Val Acc: {xgb_accuracy:.2f}')
-                # self.xgb_model.save_model(f"{ckpt}/{self.xgb_model.__class__.__name__}_{target_col}.json")
+                if save_ckpt: self.xgb_model.save_model(f"{ckpt}/{self.xgb_model.__class__.__name__}_{target_col}.json")
             elif model == 'bilstm':   
-                train_loader = self.get_tensor(X_train, y_train)
-                val_loader = self.get_tensor(X_val, y_val)
-                bilstm_acc, y_pred, y_probas = train_val_dl_models(self.bilstm_model, train_loader, val_loader)
+                bilstm_acc, y_pred, y_probas = train_val_dl_models(self.bilstm_model, X_train, y_train, X_val, y_val)
                 self.all_outputs[model][target_col] = (y_val, y_pred, y_probas)
                 logging.info(f'BILSTM Val Acc: {bilstm_acc:.2f}')
-                torch.save(self.bilstm_model.state_dict(), f"{ckpt}/{self.bilstm_model.__class__.__name__}_{target_col}.pth")
+                if save_ckpt: torch.save(self.bilstm_model.state_dict(), f"{ckpt}/{self.bilstm_model.__class__.__name__}_{target_col}.pth")
             elif model == 'mlp':  
-                train_loader = self.get_tensor(X_train, y_train)
-                val_loader = self.get_tensor(X_val, y_val)  
-                mlp_acc, y_pred, y_probas = train_val_dl_models(self.mlp_model, train_loader, val_loader)
+                mlp_acc, y_pred, y_probas = train_val_dl_models(self.mlp_model, X_train, y_train, X_val, y_val)
                 self.all_outputs[model][target_col] = (y_val, y_pred, y_probas)
                 logging.info(f'MLP Val Acc: {mlp_acc:.2f}')
-                # torch.save(self.mlp_model.state_dict(), f"{ckpt}/{self.mlp_model.__class__.__name__}_{target_col}.pth")
+                if save_ckpt: torch.save(self.mlp_model.state_dict(), f"{ckpt}/{self.mlp_model.__class__.__name__}_{target_col}.pth")
         logging.info(f'Model Fitted.')
 
     def display_metrics(self, savefig=True):
@@ -137,8 +126,8 @@ class My_training:
         for model in self.models:
             logging.info(15*'='+f" {model} "+ 15*'=')
             a_output = self.all_outputs[model]
-            performance_records[model] = generate_cm(a_output, model, ckpt, True)
-            generate_auroc(a_output, model, ckpt, True)
+            performance_records[model] = generate_cm(a_output, model, ckpt, savefig)
+            generate_auroc(a_output, model, ckpt, savefig)
         performance_df = pd.DataFrame(performance_records)
         logging.info(f"Performance metrics shape: {performance_df.shape}")
         performance_df.to_csv(f"{ckpt}/performance.csv")
@@ -154,7 +143,7 @@ if __name__ == "__main__":
         print(emb, models)
         emb_models = {'1':'roberta-base', '2':'bert-base-uncased', '3':'vinai/bertweet-base', '4':'xlnet-base-cased'}
         emb = emb_models[emb] if emb in emb_models.keys() else None
-        models = ['lr', 'rf', 'xgb', 'mlp', 'bilstm'] if models == 'all' else ["xgb"]
+        models = ['lr', 'rf', 'xgb', 'mlp', 'bilstm'] if models == 'all' else [ 'mlp']
         print(emb, models)
 
         timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
@@ -166,18 +155,16 @@ if __name__ == "__main__":
         logging.info(f'Training started: {emb} {models} ')
         my_train = My_training(model_list=models, emb_model=emb, demo=None)
         my_train.read_dataset('./processed_data/pandora_train.csv', './processed_data/pandora_val.csv')
-        logging.info(30*"*")
+        logging.info(50*"*")
         for target_col in my_train.traits:
-            logging.info(10*"-")
-            logging.info(target_col)
-            logging.info(10*"-")
+            logging.info(f'{10*"-"} {target_col} {10*"-"}')
             selected_features = my_train.select_features(target_col)
             logging.info(f'Selected Features for {target_col} : {selected_features}')
             X_train, y_train = my_train.prepare_dataset(my_train.train_set.X[selected_features], my_train.train_set.contextual_emb, my_train.train_set.Y[[target_col]])
             X_val, y_val = my_train.prepare_dataset(my_train.val_set.X[selected_features], my_train.val_set.contextual_emb, my_train.val_set.Y[[target_col]])
             my_train.init_models(X_shape=X_train.shape[1])
-            my_train.fit_models(X_train, y_train, X_val, y_val, target_col)
-            logging.info(30*"*")
+            my_train.fit_models(X_train, y_train, X_val, y_val, target_col, save_ckpt=False)
+            logging.info(50*"-")
         my_train.display_metrics()
         
     except:
