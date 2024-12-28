@@ -9,7 +9,7 @@ from sklearn.preprocessing import StandardScaler
 from torch.utils.data import DataLoader, TensorDataset
 from utils.DataProcessor import FeatureSelection, PreProcessor
 from utils.Visualization import generate_cm, generate_auroc
-from utils.Models import train_val_dl_models, train_with_kfold_val_dl_models, MLP
+from utils.Models import train_val_dl_models, train_with_kfold_val_dl_models, MLP, evaluate_on_test_dataset
 import xgboost as xgb
 from sklearn.svm import SVC
 from sklearn.linear_model import LogisticRegression
@@ -18,11 +18,22 @@ global timestamp
 global ckpt 
 global logging
 
+hyperparameters = {
+    'kfold' : False,
+    'hidden_dim' : 128,
+    'dropout_rate' : 0.3,
+    'batch_size': 16,
+    'epochs': 16,
+    'learning_rate': 0.001,
+    'random_state': 42,
+    'max_grad_norm': 1
+}
+
 class Dataset:
     def __init__(self, filepath, emb_model, targets, demo):
         logging.info(f'Processing  {filepath} Dataset.')
         df = pd.read_csv(filepath) 
-        if demo: df = df[:demo]
+        if demo: df = df.sample(demo)
         self.contextual_emb = PreProcessor.process_embeddings(df, emb_model) if emb_model else []
         self.X = df.drop(['Unnamed: 0', 'STATUS'] + targets, axis=1)
         self.Y = df[targets]
@@ -38,13 +49,20 @@ class My_training:
         for model in model_list:
             self.all_outputs[model] = {}
     
+    
+    # def read_dataset(self, train_file, val_file):
+    #     self.train_set = Dataset(train_file, self.emb_model, self.traits, self.demo)    
+    #     self.val_set = Dataset(val_file, self.emb_model, self.traits, self.demo)   
+    #     return self.train_set, self.val_set
+
+
     # def read_dataset(self, train_file, val_file):
     #     self.train_set = Dataset(train_file, self.emb_model, self.traits, self.demo)    
     #     self.val_set = Dataset(val_file, self.emb_model, self.traits, self.demo)   
     #     return self.train_set, self.val_set
 
     def select_features(self, X, y):
-        return FeatureSelection.mutual_info_selection(X, y)
+        return FeatureSelection.mutual_info_selection(X, y) #TODO experiment with other feature selection
         
     def prepare_dataset(self, stat_df, emb_df, y_df):
         # logging.info(f'{stat_df.shape}, {y_df.shape}, {emb_df.shape}')
@@ -125,8 +143,8 @@ class My_training:
         for model in self.models:
             logging.info(15*'='+f" {model} "+ 15*'=')
             a_output = self.all_outputs[model]
-            performance_records[model] = generate_cm(a_output, model, ckpt, savefig)
-            generate_auroc(a_output, model, ckpt, savefig)
+            performance_records[model] = generate_cm(a_output, f'{ckpt}/{model}_cm.png')
+            generate_auroc(a_output, model, f'{ckpt}/{model}_auroc.png')
         performance_df = pd.DataFrame(performance_records)
         logging.info(f"Performance metrics shape: {performance_df.shape}")
         performance_df.to_csv(f"{ckpt}/performance.csv")
@@ -138,7 +156,7 @@ class My_training:
 def kfold_train(emb, models, demo):
     logging.info(f'K-Fold Training started: {emb} {models} {demo}')
     my_train = My_training(model_list=models, emb_model=emb, demo=demo)
-    dataset = Dataset('./processed_data/pandora_train.csv', my_train.emb_model, my_train.traits, my_train.demo)    
+    dataset = Dataset('./processed_data/2-splits/pandora_train_val.csv', my_train.emb_model, my_train.traits, my_train.demo)    
     logging.info(50*"*")
     for target_col in my_train.traits:
         logging.info(f'{10*"-"} {target_col} {10*"-"}')
@@ -150,12 +168,22 @@ def kfold_train(emb, models, demo):
         my_train.all_outputs['mlp'][target_col] = (y_val, y_pred, y_probas)
     my_train.display_metrics()
 
+    a_output= {}
+    for target_col in my_train.traits:
+        test_dataset = Dataset('./processed_data/2-splits/pandora_test.csv', my_train.emb_model, my_train.traits, my_train.demo)    
+        X, y = my_train.prepare_dataset(test_dataset.X[selected_features], test_dataset.contextual_emb, test_dataset.Y[[target_col]])
+        acc, preds, probas = evaluate_on_test_dataset(mlp_model, X, y)
+        logging.info(f"Accuracy: {target_col}: {acc}")
+        a_output[target_col] = (y, preds, probas)
+    model ='mlp'
+    generate_cm(a_output, f'{ckpt}/{model}_cm_test.png')
+    generate_auroc(a_output, model, f'{ckpt}/{model}_auroc_test.png')
+
 def train(emb, models, demo):
     logging.info(f'Training started: {emb} {models} {demo}')
     my_train = My_training(model_list=models, emb_model=emb, demo=demo)
-    train_set = Dataset('./processed_data/pandora_train.csv', my_train.emb_model, my_train.traits, my_train.demo)   
-    val_set = Dataset('./processed_data/pandora_val.csv', my_train.emb_model, my_train.traits, my_train.demo)    
- 
+    train_set = Dataset('./processed_data/3-splits/pandora_train.csv', my_train.emb_model, my_train.traits, my_train.demo)   
+    val_set = Dataset('./processed_data/3-splits/pandora_val.csv', my_train.emb_model, my_train.traits, my_train.demo)    
     logging.info(50*"*")
     for target_col in my_train.traits:
         logging.info(f'{10*"-"} {target_col} {10*"-"}')

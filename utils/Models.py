@@ -74,7 +74,24 @@ class BiLSTMClassifier(nn.Module):
 # output= model(input_data)
 # print(output.shape)  # Expected output: (batch_size, output_dim)
 
-def train_val_dl_models(model, X_train, y_train, X_val, y_val,  batch_size=32, epochs=16, lr=0.001, max_grad_norm=1.0):
+def evaluate_on_test_dataset(model, X, y, batch_size=32, threshold=0.5):
+    logging.info(f'{model.__class__.__name__}; threshold={threshold}, batch_size={batch_size}')
+    dataset = TensorDataset(torch.tensor(X, dtype=torch.float32), torch.tensor(y, dtype=torch.float32))
+    test_loader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
+    test_preds, test_probas, correct = [], [], 0
+    model.eval()  
+    with torch.no_grad():  
+        for input, target in test_loader:
+            output = model(input)
+            probs = torch.sigmoid(output) 
+            pred = (probs > threshold).float() 
+            correct += pred.eq(target.view_as(pred)).sum().item()
+            test_probas.append(probs)  
+            test_preds.append(pred)
+    test_acc = correct / len(test_loader.dataset)
+    return test_acc, torch.cat(test_preds), torch.cat(test_probas)
+
+def train_val_dl_models(model, X_train, y_train, X_val, y_val, batch_size=32, epochs=16, lr=0.001, max_grad_norm=1.0):
     logging.info(f'{model.__class__.__name__}; lr={lr}, batch_size={batch_size}')
     train_dataset = TensorDataset(torch.tensor(X_train, dtype=torch.float32), torch.tensor(y_train, dtype=torch.float32))
     val_dataset = TensorDataset(torch.tensor(X_val, dtype=torch.float32), torch.tensor(y_val, dtype=torch.float32))
@@ -117,7 +134,7 @@ def train_val_dl_models(model, X_train, y_train, X_val, y_val,  batch_size=32, e
         val_accuracy = correct / len(val_loader.dataset)
         val_acc = accuracy_score(torch.cat(val_targets).numpy(), torch.cat(val_preds).numpy())
         if epoch % 4 == 0:
-            logging.info(f'Epoch: [{epoch + 1}/{epochs}], Train accuracy:{train_accuracy:.4f}, Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}, Val Accuracy: {val_accuracy:.4f},  Val_Acc: {val_acc} ')
+            logging.info(f'Epoch: [{epoch + 1}/{epochs}], Train:: Loss: {train_loss:.4f}, Acc:{train_accuracy:.4f}, and  Val:: Loss: {val_loss:.4f}, Acc: {val_accuracy:.4f} ')
     return val_accuracy, torch.cat(val_preds), torch.cat(val_probas)
 
 def train_with_kfold_val_dl_models(model, X, y, k_folds=5, batch_size=32, epochs=16, lr=0.001, max_grad_norm=1.0):
@@ -129,7 +146,6 @@ def train_with_kfold_val_dl_models(model, X, y, k_folds=5, batch_size=32, epochs
     fold_results = {}
 
     for fold, (train_idx, val_idx) in enumerate(kf.split(dataset)):
-        logging.info(f'Fold {fold+1}/{k_folds}')
         train_subset = Subset(dataset, train_idx)
         val_subset = Subset(dataset, val_idx)
         train_loader = DataLoader(train_subset, batch_size=batch_size, shuffle=True)
@@ -171,6 +187,7 @@ def train_with_kfold_val_dl_models(model, X, y, k_folds=5, batch_size=32, epochs
         val_accuracy = correct / len(val_loader.dataset)
         val_acc = accuracy_score(torch.cat(val_targets).numpy(), torch.cat(val_preds).numpy())
         fold_results[fold] = {'train_loss': train_loss, 'train_acc': train_accuracy, 'val_loss': val_loss, 'val_accuracy': val_accuracy}
-        logging.info(f'Fold {fold+1} - Train Loss: {train_loss:.4f}, Train Accuracy: {train_accuracy:.4f} and Val Loss: {val_loss:.4f}, Val Accuracy: {val_accuracy:.4f}')
+        logging.info(f'Fold {fold+1}/{k_folds} - Train:: Loss: {train_loss:.4f}, Acc: {train_accuracy:.4f} and Val:: Loss: {val_loss:.4f}, Acc: {val_accuracy:.4f}')
+    # logging.info(fold_results)
     return val_accuracy, torch.cat(val_preds), torch.cat(val_probas), torch.cat(val_targets)
 
