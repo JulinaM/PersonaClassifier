@@ -48,18 +48,6 @@ class My_training:
         self.all_outputs ={}
         for model in model_list:
             self.all_outputs[model] = {}
-    
-    
-    # def read_dataset(self, train_file, val_file):
-    #     self.train_set = Dataset(train_file, self.emb_model, self.traits, self.demo)    
-    #     self.val_set = Dataset(val_file, self.emb_model, self.traits, self.demo)   
-    #     return self.train_set, self.val_set
-
-
-    # def read_dataset(self, train_file, val_file):
-    #     self.train_set = Dataset(train_file, self.emb_model, self.traits, self.demo)    
-    #     self.val_set = Dataset(val_file, self.emb_model, self.traits, self.demo)   
-    #     return self.train_set, self.val_set
 
     def select_features(self, X, y):
         return FeatureSelection.mutual_info_selection(X, y) #TODO experiment with other feature selection
@@ -137,27 +125,31 @@ class My_training:
                 if save_ckpt: torch.save(self.mlp_model.state_dict(), f"{ckpt}/{self.mlp_model.__class__.__name__}_{target_col}.pth")
         logging.info(f'Model Fitted.')
 
-    def display_metrics(self, savefig=True):
+    def display_metrics(self, all_outputs, Test=False, savefig=True):
         logging.info(f'Generating Metrics and Figures.')
         performance_records = {} 
-        for model in self.models:
+        for model in all_outputs:
             logging.info(15*'='+f" {model} "+ 15*'=')
-            a_output = self.all_outputs[model]
-            performance_records[model] = generate_cm(a_output, f'{ckpt}/{model}_cm.png')
-            generate_auroc(a_output, model, f'{ckpt}/{model}_auroc.png')
-        performance_df = pd.DataFrame(performance_records)
-        logging.info(f"Performance metrics shape: {performance_df.shape}")
-        performance_df.to_csv(f"{ckpt}/performance.csv")
-        # # for col in self.traits:
-        #     s = performance_df[performance_df['Classifier'] ==col]
-        #     best_model_row = s.loc[s['Accuracy'].idxmax()]
-        #     logging.info(f'For {best_model_row["Classifier"]}, {best_model_row["Model"]},  {best_model_row["Accuracy"]}')
+            a_output = all_outputs[model]
+            (cm, auroc, perf) = ('cm_test', 'auroc_test', 'performance_test') if Test else ('cm', 'auroc', 'performance')
+            performance_records[model] = generate_cm(a_output, f'{ckpt}/{model}_{cm}.png')
+            generate_auroc(a_output, model, f'{ckpt}/{model}_{auroc}.png')
+            performance_df = pd.DataFrame(performance_records)
+            logging.info(f"Performance df shape: {performance_df.shape}")
+            performance_df.to_csv(f"{ckpt}/{perf}.csv")
+            # # for col in self.traits:
+            #     s = performance_df[performance_df['Classifier'] ==col]
+            #     best_model_row = s.loc[s['Accuracy'].idxmax()]
+            #     logging.info(f'For {best_model_row["Classifier"]}, {best_model_row["Model"]},  {best_model_row["Accuracy"]}')
 
 def kfold_train(emb, models, demo):
     logging.info(f'K-Fold Training started: {emb} {models} {demo}')
     my_train = My_training(model_list=models, emb_model=emb, demo=demo)
     dataset = Dataset('./processed_data/2-splits/pandora_train_val.csv', my_train.emb_model, my_train.traits, my_train.demo)    
+    test_dataset = Dataset('./processed_data/2-splits/pandora_test.csv', my_train.emb_model, my_train.traits, my_train.demo)    
+
     logging.info(50*"*")
+    train_outtputs, test_outputs = {'mlp':{}}, {'mlp':{}}
     for target_col in my_train.traits:
         logging.info(f'{10*"-"} {target_col} {10*"-"}')
         selected_features = my_train.select_features(dataset.X, dataset.Y[[target_col]])
@@ -165,20 +157,16 @@ def kfold_train(emb, models, demo):
         X, y = my_train.prepare_dataset(dataset.X[selected_features], dataset.contextual_emb, dataset.Y[[target_col]])
         mlp_model = MLP(input_size=X.shape[1], hidden_size=128, output_size=1, dropout_rate=0.3)
         mlp_acc, y_pred, y_probas, y_val = train_with_kfold_val_dl_models(mlp_model, X, y)
-        my_train.all_outputs['mlp'][target_col] = (y_val, y_pred, y_probas)
-    my_train.display_metrics()
-
-    a_output= {}
-    for target_col in my_train.traits:
-        test_dataset = Dataset('./processed_data/2-splits/pandora_test.csv', my_train.emb_model, my_train.traits, my_train.demo)    
-        X, y = my_train.prepare_dataset(test_dataset.X[selected_features], test_dataset.contextual_emb, test_dataset.Y[[target_col]])
-        acc, preds, probas = evaluate_on_test_dataset(mlp_model, X, y)
-        logging.info(f"Accuracy: {target_col}: {acc}")
-        a_output[target_col] = (y, preds, probas)
-    model ='mlp'
-    generate_cm(a_output, f'{ckpt}/{model}_cm_test.png')
-    generate_auroc(a_output, model, f'{ckpt}/{model}_auroc_test.png')
-
+        logging.info(f"Val Accuracy: {target_col}: {mlp_acc}")
+        train_outtputs['mlp'][target_col] = (y_val, y_pred, y_probas)
+        #Evaluate
+        X_test, y_test = my_train.prepare_dataset(test_dataset.X[selected_features], test_dataset.contextual_emb, test_dataset.Y[[target_col]])
+        acc, preds, probas = evaluate_on_test_dataset(mlp_model, X_test, y_test)
+        test_outputs['mlp'][target_col] = (y_test, preds, probas)
+        logging.info(f"Test Accuracy: {target_col}: {acc}")
+    my_train.display_metrics(train_outtputs)
+    my_train.display_metrics(test_outputs, True)
+   
 def train(emb, models, demo):
     logging.info(f'Training started: {emb} {models} {demo}')
     my_train = My_training(model_list=models, emb_model=emb, demo=demo)
@@ -194,7 +182,7 @@ def train(emb, models, demo):
         my_train.init_models(X_shape=X_train.shape[1])
         my_train.fit_models(X_train, y_train, X_val, y_val, target_col, save_ckpt=False)
         logging.info(50*"-")
-    my_train.display_metrics()
+    my_train.display_metrics(my_train.all_outputs)
 
     
 if __name__ == "__main__":
