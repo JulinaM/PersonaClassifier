@@ -5,9 +5,9 @@ import torch.nn as nn
 import re,os, glob, traceback, nltk, logging, sys
 from sklearn.metrics import accuracy_score, confusion_matrix, ConfusionMatrixDisplay, precision_score, recall_score, f1_score, roc_curve, auc
 
-def generate_auroc(a_output, model, ckpt, savefig=True):      
+def generate_auroc(a_output, model, filepath=None):      
     plt.figure(figsize=(8, 6))
-    for trait, (y_true, y_pred, y_scores) in a_output.items():
+    for trait, (y_true, _, y_scores) in a_output.items():
         fpr, tpr, thresholds = roc_curve(y_true, y_scores)
         youden_index = tpr - fpr
         optimal_idx = youden_index.argmax()
@@ -23,11 +23,11 @@ def generate_auroc(a_output, model, ckpt, savefig=True):
     plt.title(f'ROC Curves for Multiple (Trait) Classifiers using {model}')
     plt.legend(loc="lower right")
     plt.grid(alpha=0.3)
-    if savefig: plt.savefig(f'{ckpt}/{model}_auroc.png')
+    if filepath: plt.savefig(filepath)
     plt.show()
 
 
-def generate_cm(a_output, model, ckpt, savefig=True):
+def generate_cm(a_output, filepath=None):
     n_classifiers = len(a_output)
     fig, axes = plt.subplots(1, n_classifiers, figsize=(5 * n_classifiers, 5))
     results = []
@@ -45,7 +45,7 @@ def generate_cm(a_output, model, ckpt, savefig=True):
         specificity = tn / (tn + fp) if (tn + fp) > 0 else 0  # Avoid division by zero
         false_positive_rate = fp / (fp + tn) if (fp + tn) > 0 else 0  # Avoid division by zero
         results.append( {
-            "Model": model,
+            # "Model": model,
             "Classifier": trait,
             "Accuracy": accuracy,
             "Precision": precision,
@@ -56,7 +56,7 @@ def generate_cm(a_output, model, ckpt, savefig=True):
             "Confusion Matrix": cm 
         })
     plt.tight_layout()
-    if savefig: plt.savefig(f"{ckpt}/{model}_cm.png")
+    if filepath: plt.savefig(filepath)
     return results
 
     
