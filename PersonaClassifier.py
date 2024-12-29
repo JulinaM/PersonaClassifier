@@ -14,6 +14,7 @@ import xgboost as xgb
 from sklearn.svm import SVC
 from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import RandomForestClassifier
+from sklearn.model_selection import train_test_split, KFold
 global timestamp
 global ckpt 
 global logging
@@ -37,7 +38,7 @@ class Dataset:
         self.contextual_emb = PreProcessor.process_embeddings(df, emb_model) if emb_model else []
         self.X = df.drop(['Unnamed: 0', 'STATUS'] + targets, axis=1)
         self.Y = df[targets]
-        logging.info(f'X Shape: {self.X.shape}, Y Shape: {self.Y.shape},  Contextual Emb Shape: {self.contextual_emb.shape}')
+        logging.info(f'X Shape: {self.X.shape}, Y Shape: {self.Y.shape},  Contextual Emb Shape: {self.contextual_emb.shape if emb_model else []}')
 
 class My_training:
     def __init__(self, model_list=None, emb_model=None, demo=True,traits=None, ):
@@ -114,24 +115,24 @@ class My_training:
                 logging.info(f'SGBoost Val Acc: {xgb_accuracy:.2f}')
                 if save_ckpt: self.xgb_model.save_model(f"{ckpt}/{self.xgb_model.__class__.__name__}_{target_col}.json")
             elif model == 'bilstm':   
-                bilstm_acc, y_pred, y_probas = train_val_dl_models(self.bilstm_model, X_train, y_train, X_val, y_val)
+                bilstm_acc, y_pred, y_probas = train_val_dl_models(self.bilstm_model, X_train, y_train, X_val, y_val, ckpt=ckpt)
                 self.all_outputs[model][target_col] = (y_val, y_pred, y_probas)
                 logging.info(f'BILSTM Val Acc: {bilstm_acc:.2f}')
                 if save_ckpt: torch.save(self.bilstm_model.state_dict(), f"{ckpt}/{self.bilstm_model.__class__.__name__}_{target_col}.pth")
             elif model == 'mlp':  
-                mlp_acc, y_pred, y_probas = train_val_dl_models(self.mlp_model, X_train, y_train, X_val, y_val)
+                mlp_acc, y_pred, y_probas = train_val_dl_models(self.mlp_model, X_train, y_train, X_val, y_val,ckpt=ckpt)
                 self.all_outputs[model][target_col] = (y_val, y_pred, y_probas)
                 logging.info(f'MLP Val Acc: {mlp_acc:.2f}')
                 if save_ckpt: torch.save(self.mlp_model.state_dict(), f"{ckpt}/{self.mlp_model.__class__.__name__}_{target_col}.pth")
         logging.info(f'Model Fitted.')
 
-    def display_metrics(self, all_outputs, Test=False, savefig=True):
+    def display_metrics(self, all_outputs, isTest=False, savefig=True):
         logging.info(f'Generating Metrics and Figures.')
         performance_records = {} 
         for model in all_outputs:
             logging.info(15*'='+f" {model} "+ 15*'=')
             a_output = all_outputs[model]
-            (cm, auroc, perf) = ('cm_test', 'auroc_test', 'performance_test') if Test else ('cm', 'auroc', 'performance')
+            (cm, auroc, perf) = ('cm_test', 'auroc_test', 'performance_test') if isTest else ('cm', 'auroc', 'performance')
             performance_records[model] = generate_cm(a_output, f'{ckpt}/{model}_{cm}.png')
             generate_auroc(a_output, model, f'{ckpt}/{model}_{auroc}.png')
             performance_df = pd.DataFrame(performance_records)
@@ -155,7 +156,7 @@ def kfold_train(emb, models, demo):
         selected_features = my_train.select_features(dataset.X, dataset.Y[[target_col]])
         logging.info(f'Selected Features for {target_col} : {selected_features}')
         X, y = my_train.prepare_dataset(dataset.X[selected_features], dataset.contextual_emb, dataset.Y[[target_col]])
-        mlp_model = MLP(input_size=X.shape[1], hidden_size=128, output_size=1, dropout_rate=0.3)
+        mlp_model = MLP(input_size=X.shape[1], hidden_size=128, output_size=1, dropout_rate=0.5)
         mlp_acc, y_pred, y_probas, y_val = train_with_kfold_val_dl_models(mlp_model, X, y)
         logging.info(f"Val Accuracy: {target_col}: {mlp_acc}")
         train_outtputs['mlp'][target_col] = (y_val, y_pred, y_probas)
@@ -165,22 +166,21 @@ def kfold_train(emb, models, demo):
         test_outputs['mlp'][target_col] = (y_test, preds, probas)
         logging.info(f"Test Accuracy: {target_col}: {acc}")
     my_train.display_metrics(train_outtputs)
-    my_train.display_metrics(test_outputs, True)
+    my_train.display_metrics(test_outputs, isTest=True)
    
 def train(emb, models, demo):
     logging.info(f'Training started: {emb} {models} {demo}')
     my_train = My_training(model_list=models, emb_model=emb, demo=demo)
-    train_set = Dataset('./processed_data/3-splits/pandora_train.csv', my_train.emb_model, my_train.traits, my_train.demo)   
-    val_set = Dataset('./processed_data/3-splits/pandora_val.csv', my_train.emb_model, my_train.traits, my_train.demo)    
+    train_set = Dataset('./processed_data/2-splits/pandora_train_val.csv', my_train.emb_model, my_train.traits, my_train.demo)   
     logging.info(50*"*")
     for target_col in my_train.traits:
         logging.info(f'{10*"-"} {target_col} {10*"-"}')
         selected_features = my_train.select_features(train_set.X, train_set.Y[[target_col]] )
         logging.info(f'Selected Features for {target_col} : {selected_features}')
-        X_train, y_train = my_train.prepare_dataset(train_set.X[selected_features], train_set.contextual_emb, train_set.Y[[target_col]])
-        X_val, y_val = my_train.prepare_dataset(val_set.X[selected_features], val_set.contextual_emb, val_set.Y[[target_col]])
+        X, y = my_train.prepare_dataset(train_set.X[selected_features], train_set.contextual_emb, train_set.Y[[target_col]])
+        X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.1, shuffle=True, random_state=42)
         my_train.init_models(X_shape=X_train.shape[1])
-        my_train.fit_models(X_train, y_train, X_val, y_val, target_col, save_ckpt=False)
+        my_train.fit_models(X_train, y_train, X_val, y_val, target_col, save_ckpt=True)
         logging.info(50*"-")
     my_train.display_metrics(my_train.all_outputs)
 
@@ -190,7 +190,7 @@ if __name__ == "__main__":
         emb = sys.argv[1]
         models = sys.argv[2]
         kfold = True #sys.argv[3]
-        demo = None
+        demo = 100
         print(emb, models, kfold, demo)
         emb_models = {'1':'roberta-base', '2':'bert-base-uncased', '3':'vinai/bertweet-base', '4':'xlnet-base-cased'}
         emb = emb_models[emb] if emb in emb_models.keys() else None
