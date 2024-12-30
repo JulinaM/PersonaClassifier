@@ -9,7 +9,8 @@ from sklearn.preprocessing import StandardScaler
 from torch.utils.data import DataLoader, TensorDataset
 from utils.DataProcessor import FeatureSelection, PreProcessor
 from utils.Visualization import generate_cm, generate_auroc
-from utils.Models import train_val_dl_models, train_with_kfold_val_dl_models, MLP, evaluate_on_test_dataset
+from utils.Models import MLP
+from utils.Training import train_val_dl_models, train_with_kfold_val_dl_models, evaluate_on_test_dataset
 import xgboost as xgb
 from sklearn.svm import SVC
 from sklearn.linear_model import LogisticRegression
@@ -137,7 +138,7 @@ class My_training:
             generate_auroc(a_output, model, f'{ckpt}/{model}_{auroc}.png')
             performance_df = pd.DataFrame(performance_records)
             logging.info(f"Performance df shape: {performance_df.shape}")
-            performance_df.to_csv(f"{ckpt}/{perf}.csv")
+            if savefig: performance_df.to_csv(f"{ckpt}/{perf}.csv")
             # # for col in self.traits:
             #     s = performance_df[performance_df['Classifier'] ==col]
             #     best_model_row = s.loc[s['Accuracy'].idxmax()]
