@@ -150,39 +150,46 @@ def kfold_train(emb, models, demo):
     test_dataset = Dataset('./processed_data/2-splits/pandora_test.csv', my_train.emb_model, my_train.traits, my_train.demo)    
 
     logging.info(50*"*")
-    train_outtputs, test_outputs = {'mlp':{}}, {'mlp':{}}
+    train_outtputs, test_outputs, selected_features = {'mlp':{}}, {'mlp':{}}, {}
     for target_col in my_train.traits:
         logging.info(f'{10*"-"} {target_col} {10*"-"}')
-        selected_features = my_train.select_features(dataset.X, dataset.Y[[target_col]])
-        logging.info(f'Selected Features for {target_col} : {selected_features}')
-        X, y = my_train.prepare_dataset(dataset.X[selected_features], dataset.contextual_emb, dataset.Y[[target_col]])
+        features = my_train.select_features(dataset.X, dataset.Y[[target_col]])
+        selected_features[target_col] = features
+        logging.info(f'Selected Features for {target_col} : {len(features)}')
+        X, y = my_train.prepare_dataset(dataset.X[features], dataset.contextual_emb, dataset.Y[[target_col]])
         mlp_model = MLP(input_size=X.shape[1], hidden_size=128, output_size=1, dropout_rate=0.5)
         mlp_acc, y_pred, y_probas, y_val = train_with_kfold_val_dl_models(mlp_model, X, y)
         logging.info(f"Val Accuracy: {target_col}: {mlp_acc}")
         train_outtputs['mlp'][target_col] = (y_val, y_pred, y_probas)
         #Evaluate
-        X_test, y_test = my_train.prepare_dataset(test_dataset.X[selected_features], test_dataset.contextual_emb, test_dataset.Y[[target_col]])
+        X_test, y_test = my_train.prepare_dataset(test_dataset.X[features], test_dataset.contextual_emb, test_dataset.Y[[target_col]])
         acc, preds, probas = evaluate_on_test_dataset(mlp_model, X_test, y_test)
         test_outputs['mlp'][target_col] = (y_test, preds, probas)
         logging.info(f"Test Accuracy: {target_col}: {acc}")
     my_train.display_metrics(train_outtputs)
     my_train.display_metrics(test_outputs, isTest=True)
+    # pd.DataFrame(selected_features).to_csv(f"{ckpt}/selected_features.csv")
+    logging.info(f'selected_features :{selected_features}')
    
 def train(emb, models, demo):
     logging.info(f'Training started: {emb} {models} {demo}')
     my_train = My_training(model_list=models, emb_model=emb, demo=demo)
     train_set = Dataset('./processed_data/2-splits/pandora_train_val.csv', my_train.emb_model, my_train.traits, my_train.demo)   
     logging.info(50*"*")
+    selected_features ={}
     for target_col in my_train.traits:
         logging.info(f'{10*"-"} {target_col} {10*"-"}')
-        selected_features = my_train.select_features(train_set.X, train_set.Y[[target_col]] )
-        logging.info(f'Selected Features for {target_col} : {selected_features}')
-        X, y = my_train.prepare_dataset(train_set.X[selected_features], train_set.contextual_emb, train_set.Y[[target_col]])
+        features = my_train.select_features(train_set.X, train_set.Y[[target_col]] )
+        selected_features[target_col] = features
+        logging.info(f'Selected Features for {target_col} : {features}')
+        X, y = my_train.prepare_dataset(train_set.X[features], train_set.contextual_emb, train_set.Y[[target_col]])
         X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.1, shuffle=True, random_state=42)
         my_train.init_models(X_shape=X_train.shape[1])
         my_train.fit_models(X_train, y_train, X_val, y_val, target_col, save_ckpt=True)
         logging.info(50*"-")
     my_train.display_metrics(my_train.all_outputs)
+    # pd.DataFrame(selected_features).to_csv(f"{ckpt}/selected_features.csv")
+    logging.info(f'selected_features :{selected_features}')
 
     
 if __name__ == "__main__":

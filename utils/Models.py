@@ -189,10 +189,8 @@ def train_with_kfold_val_dl_models(model, X, y, k_folds=5, batch_size=32, epochs
         optimizer = optim.Adam(model.parameters(), lr=lr)
         for epoch in range(epochs):
             train_accuracy, train_loss = train_one_epoch(model, train_loader, criterion, optimizer, max_grad_norm)
-            train_accuracies.append(train_accuracy)
 
         val_accuracy, val_loss, val_preds, val_probas, val_targets = validate_one_epoch(model, val_loader,  criterion)
-        val_accuracies.append(val_accuracy)
         fold_results[fold] = {'train_loss': train_loss, 'train_acc': train_accuracy, 'val_loss': val_loss, 'val_accuracy': val_accuracy}
         logging.info(f'Fold {fold+1}/{k_folds} - Train:: Loss: {train_loss:.4f}, Acc: {train_accuracy:.4f} and Val:: Loss: {val_loss:.4f}, Acc: {val_accuracy:.4f}')
         if early_stopper.early_stop(val_loss):   
