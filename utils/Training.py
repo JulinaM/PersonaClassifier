@@ -62,6 +62,15 @@ def validate_one_epoch(model, val_loader, criterion, threshold=0.5):
     val_accuracy = correct / len(val_loader.dataset)
     return val_accuracy, val_loss, val_preds, val_probas, val_targets
 
+def make_prediction(model, X, threshold=0.5):
+    X_tensor = torch.tensor(X, dtype=torch.float32)
+    model.eval()  
+    with torch.no_grad():  
+        output = model(X_tensor)
+        probs = torch.sigmoid(output) 
+        pred = (probs > threshold).float() 
+    return pred.numpy(), probs.numpy()
+
 def evaluate_on_test_dataset(model, X, y, batch_size=32, threshold=0.5):
     logging.info(f'{model.__class__.__name__}; threshold={threshold}, batch_size={batch_size}')
     dataset = TensorDataset(torch.tensor(X, dtype=torch.float32), torch.tensor(y, dtype=torch.float32))

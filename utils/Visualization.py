@@ -4,6 +4,36 @@ import numpy as np
 import torch.nn as nn
 import re,os, glob, traceback, nltk, logging, sys
 from sklearn.metrics import accuracy_score, confusion_matrix, ConfusionMatrixDisplay, precision_score, recall_score, f1_score, roc_curve, auc
+from sklearn.calibration import calibration_curve
+
+def display_calibration(y_test, y_prob, target, filepath=None):
+    plt.figure(figsize=(8, 6))
+    prob_true, prob_pred = calibration_curve(y_test, y_prob, n_bins=10, strategy='uniform')
+    plt.plot(prob_pred, prob_true, marker='o', label='Calibrated')
+    plt.plot([0, 1], [0, 1], linestyle='--', label='Perfectly Calibrated')
+    plt.xlabel(f'Mean Predicted Probability')
+    plt.ylabel('Fraction of Positives')
+    plt.title(f'Calibration Curve for {target}')
+    plt.legend()
+    if filepath: plt.savefig(filepath)
+    plt.show()
+
+def display_auroc(y_test, y_prob, target, filepath=None):
+    plt.figure(figsize=(8, 6))
+    fpr, tpr, thresholds = roc_curve(y_test, y_prob)
+    roc_auc = auc(fpr, tpr)
+    plt.figure()
+    plt.plot(fpr, tpr, color='darkorange', lw=2, label='ROC curve (area = %0.2f)' % roc_auc)
+    plt.plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--')
+    plt.xlim([0.0, 1.0])
+    plt.ylim([0.0, 1.05])
+    plt.xlabel('False Positive Rate')
+    plt.ylabel('True Positive Rate')
+    plt.title(f'Receiver Operating Characteristic (ROC) for {target}')
+    plt.legend(loc="lower right")
+    if filepath: plt.savefig(filepath)
+    plt.show()
+
 
 def generate_auroc(a_output, model, filepath=None):      
     plt.figure(figsize=(8, 6))
@@ -58,23 +88,6 @@ def generate_cm(a_output, filepath=None):
     plt.tight_layout()
     if filepath: plt.savefig(filepath)
     return results
-
-    
-def display_metrics(savefig=True):
-    logging.info(f'generating metrics and confusion matrix ..')
-    performance_records = [] 
-    for model in self.models:
-        logging.info(15*'='+f" {model} "+ 15*'=')
-        a_output = self.all_outputs[model]
-        n_classifiers = len(a_output)
-        
-    performance_df = pd.DataFrame(performance_records)
-    logging.info(f"Performance metrics dataframe created with shape: {performance_df.shape}")
-    performance_df.to_csv(f"{ckpt}/performance.csv")
-    for col in self.traits:
-        s = performance_df[performance_df['Classifier'] ==col]
-        best_model_row = s.loc[s['Accuracy'].idxmax()]
-        logging.info(f'For {best_model_row["Classifier"]}, {best_model_row["Model"]},  {best_model_row["Accuracy"]}')
 
 
 #TODO

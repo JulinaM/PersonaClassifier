@@ -1,5 +1,8 @@
 import torch.nn as nn
 import torch
+import numpy as np
+from sklearn.base import BaseEstimator, ClassifierMixin
+from utils.Training import train_with_kfold_val_dl_models, train_val_dl_models, make_prediction
 
 class MLP(nn.Module):
     def __init__(self, input_size, hidden_size, output_size, dropout_rate=0.3):
@@ -67,3 +70,28 @@ class BiLSTMClassifier(nn.Module):
 # input_data = torch.randn(2, 5, 768)  # Example input (batch_size=32, seq_len=50, input_dim=768)
 # output= model(input_data)
 # print(output.shape)  # Expected output: (batch_size, output_dim)
+
+class MLPWrapper(BaseEstimator, ClassifierMixin):
+    def __init__(self, model, epochs=32, batch_size=32, lr=0.001, device=None):
+        self.model = model
+        # self.optimizer_class = optimizer_class
+        # self.criterion = criterion
+        self.epochs = epochs
+        self.batch_size = batch_size
+        self.lr = lr
+        self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+        self.model.to(self.device)
+    
+    def fit(self, X, y):
+        self.classes_ = np.unique(y)  # Unique class labels
+        return train_with_kfold_val_dl_models(self.model, X, y, 5, self.batch_size, self.epochs, self.lr)
+
+    def predict(self, X):
+        pred, _ = make_prediction(self.model, X)
+        return pred
+        # return self.classes_[pred]  
+    
+    def predict_proba(self, X):
+        _, probas = make_prediction(self.model, X)
+        return probas
+
