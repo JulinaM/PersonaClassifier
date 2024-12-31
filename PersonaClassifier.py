@@ -10,7 +10,6 @@ from torch.utils.data import DataLoader, TensorDataset
 from utils.DataProcessor import FeatureSelection, PreProcessor
 from utils.Visualization import generate_cm, generate_auroc, display_auroc, display_calibration
 from utils.Models import MLP, MLPWrapper, BiLSTMClassifier
-from utils.Training import train_val_dl_models, train_with_kfold_val_dl_models, evaluate_on_test_dataset
 import xgboost as xgb
 from sklearn.svm import SVC
 from sklearn.linear_model import LogisticRegression
@@ -228,7 +227,7 @@ if __name__ == "__main__":
     try:
         emb = sys.argv[1]
         models = sys.argv[2]
-        kFold = False #sys.argv[3]
+        kFold = True #sys.argv[3]
         demo = None
         print(emb, models, kFold, demo)
         emb_models = {'1':'roberta-base', '2':'bert-base-uncased', '3':'vinai/bertweet-base', '4':'xlnet-base-cased'}

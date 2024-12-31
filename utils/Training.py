@@ -6,7 +6,7 @@ import torch.nn as nn
 from transformers import AutoTokenizer, AutoModel, get_linear_schedule_with_warmup
 import torch
 from sklearn.metrics import accuracy_score
-from sklearn.model_selection import train_test_split, KFold
+from sklearn.model_selection import train_test_split, KFold, StratifiedKFold
 from torch.utils.data import DataLoader, TensorDataset, Subset
 
 class EarlyStopper:
@@ -26,7 +26,7 @@ class EarlyStopper:
                 return True
         return False
 
-def train_one_epoch(model, train_loader, criterion, optimizer, max_grad_norm, threshold=0.5):
+def _train_one_epoch(model, train_loader, criterion, optimizer, max_grad_norm, threshold=0.5):
     model.train()
     correct, train_loss = 0, 0.0
     for input, target in train_loader:
@@ -44,7 +44,7 @@ def train_one_epoch(model, train_loader, criterion, optimizer, max_grad_norm, th
     train_accuracy =  correct / len(train_loader.dataset)
     return train_accuracy, train_loss
 
-def validate_one_epoch(model, val_loader, criterion, threshold=0.5):
+def _validate_one_epoch(model, val_loader, criterion, threshold=0.5):
     correct, val_loss = 0,  0.0
     val_preds, val_probas, val_targets = [], [], []
     model.eval()  
@@ -62,7 +62,8 @@ def validate_one_epoch(model, val_loader, criterion, threshold=0.5):
     val_accuracy = correct / len(val_loader.dataset)
     return val_accuracy, val_loss, val_preds, val_probas, val_targets
 
-def make_prediction(model, X, threshold=0.5):
+def predict(model, X, threshold=0.5):
+    logging.info(f'{model.__class__.__name__}; threshold={threshold}')
     X_tensor = torch.tensor(X, dtype=torch.float32)
     model.eval()  
     with torch.no_grad():  
@@ -71,14 +72,7 @@ def make_prediction(model, X, threshold=0.5):
         pred = (probs > threshold).float() 
     return pred.numpy(), probs.numpy()
 
-def evaluate_on_test_dataset(model, X, y, batch_size=32, threshold=0.5):
-    logging.info(f'{model.__class__.__name__}; threshold={threshold}, batch_size={batch_size}')
-    dataset = TensorDataset(torch.tensor(X, dtype=torch.float32), torch.tensor(y, dtype=torch.float32))
-    test_loader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
-    test_acc, _, test_preds, test_probas, _ = validate_one_epoch(model, test_loader, criterion=None, threshold=threshold)
-    return test_acc, torch.cat(test_preds), torch.cat(test_probas)
-
-def train_val_dl_models(model, X, y, batch_size=32, epochs=32, lr=0.001, max_grad_norm=1.0):
+def train_val(model, X, y, batch_size=32, epochs=32, lr=0.001, max_grad_norm=1.0):
     logging.info(f'{model.__class__.__name__}; lr={lr}, batch_size={batch_size}')
     X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.1, shuffle=True, random_state=42)
     train_dataset = TensorDataset(torch.tensor(X_train, dtype=torch.float32), torch.tensor(y_train, dtype=torch.float32))
@@ -91,36 +85,25 @@ def train_val_dl_models(model, X, y, batch_size=32, epochs=32, lr=0.001, max_gra
     train_accuracies, val_accuracies = [], []
     early_stopper = EarlyStopper(patience=3, min_delta=0)
     for epoch in range(epochs):
-        train_accuracy, train_loss = train_one_epoch(model, train_loader, criterion, optimizer, max_grad_norm)
+        train_accuracy, train_loss = _train_one_epoch(model, train_loader, criterion, optimizer, max_grad_norm)
         train_accuracies.append(train_accuracy)
 
-        val_accuracy, val_loss, val_preds, val_probas, val_targets = validate_one_epoch(model, val_loader, criterion)
+        val_accuracy, val_loss, val_preds, val_probas, val_targets = _validate_one_epoch(model, val_loader, criterion)
         val_accuracies.append(val_accuracy)
         if epoch % 4 == 0:
             logging.info(f'Epoch: [{epoch + 1}/{epochs}], Train:: Loss: {train_loss:.4f}, Acc:{train_accuracy:.4f}, and  Val:: Loss: {val_loss:.4f}, Acc: {val_accuracy:.4f} ')
         if early_stopper.early_stop(val_loss):             
             break
-    # display_acc_curve(train_accuracies, val_accuracies, epoch, ckpt)
+    # _display_acc_curve(train_accuracies, val_accuracies, epoch, ckpt)
     return val_accuracy, torch.cat(val_preds), torch.cat(val_probas), torch.cat(val_targets)
 
-def display_acc_curve(train_accuracies, val_accuracies, num_epochs, ckpt):
-    import matplotlib.pyplot as plt
-    plt.plot(range(1, num_epochs + 1), train_accuracies, label='Train Accuracy')
-    plt.plot(range(1, num_epochs + 1), val_accuracies, label='Validation Accuracy')
-    plt.xlabel('Epoch')
-    plt.ylabel('Accuracy')
-    plt.title('Accuracy Curve')
-    plt.legend()
-    plt.savefig(f'{ckpt}/acc_curve.png', dpi=300, bbox_inches='tight') 
-    plt.show()
-
-def train_with_kfold_val_dl_models(model, X, y, k_folds=5, batch_size=32, epochs=16, lr=0.001, max_grad_norm=1.0):
+def train_val_kfold(model, X, y, k_folds=5, batch_size=32, epochs=16, lr=0.001, max_grad_norm=1.0):
     logging.info(f'{model.__class__.__name__}; lr={lr}, batch_size={batch_size}, k_folds={k_folds}')
     dataset = TensorDataset(torch.tensor(X, dtype=torch.float32), torch.tensor(y, dtype=torch.float32))
 
-    kf = KFold(n_splits=k_folds, shuffle=True, random_state=42)
+    kf = StratifiedKFold(n_splits=k_folds, shuffle=True, random_state=42)
     fold_results = {}
-    early_stopper = EarlyStopper(patience=3, min_delta=0)
+    early_stopper = EarlyStopper(patience=3, min_delta=0.001)
 
     for fold, (train_idx, val_idx) in enumerate(kf.split(dataset)):
         train_subset = Subset(dataset, train_idx)
@@ -131,9 +114,9 @@ def train_with_kfold_val_dl_models(model, X, y, k_folds=5, batch_size=32, epochs
         criterion = nn.BCEWithLogitsLoss()  
         optimizer = optim.Adam(model.parameters(), lr=lr)
         for epoch in range(epochs):
-            train_accuracy, train_loss = train_one_epoch(model, train_loader, criterion, optimizer, max_grad_norm)
+            train_accuracy, train_loss = _train_one_epoch(model, train_loader, criterion, optimizer, max_grad_norm)
 
-        val_accuracy, val_loss, val_preds, val_probas, val_targets = validate_one_epoch(model, val_loader,  criterion)
+        val_accuracy, val_loss, val_preds, val_probas, val_targets = _validate_one_epoch(model, val_loader,  criterion)
         fold_results[fold] = {'train_loss': train_loss, 'train_acc': train_accuracy, 'val_loss': val_loss, 'val_accuracy': val_accuracy}
         logging.info(f'Fold {fold+1}/{k_folds} - Train:: Loss: {train_loss:.4f}, Acc: {train_accuracy:.4f} and Val:: Loss: {val_loss:.4f}, Acc: {val_accuracy:.4f}')
         if early_stopper.early_stop(val_loss):   
@@ -142,5 +125,13 @@ def train_with_kfold_val_dl_models(model, X, y, k_folds=5, batch_size=32, epochs
     # logging.info(fold_results)
     return val_accuracy, torch.cat(val_preds), torch.cat(val_probas), torch.cat(val_targets)
 
-
-
+def _display_acc_curve(train_accuracies, val_accuracies, num_epochs, ckpt):
+    import matplotlib.pyplot as plt
+    plt.plot(range(1, num_epochs + 1), train_accuracies, label='Train Accuracy')
+    plt.plot(range(1, num_epochs + 1), val_accuracies, label='Validation Accuracy')
+    plt.xlabel('Epoch')
+    plt.ylabel('Accuracy')
+    plt.title('Accuracy Curve')
+    plt.legend()
+    plt.savefig(f'{ckpt}/acc_curve.png', dpi=300, bbox_inches='tight') 
+    plt.show()
