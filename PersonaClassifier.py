@@ -8,8 +8,8 @@ from sklearn.metrics import accuracy_score
 from sklearn.preprocessing import StandardScaler
 from torch.utils.data import DataLoader, TensorDataset
 from utils.DataProcessor import FeatureSelection, PreProcessor
-from utils.Visualization import generate_cm, generate_auroc
-from utils.Models import MLP
+from utils.Visualization import generate_cm, generate_auroc, display_auroc, display_calibration
+from utils.Models import MLP, MLPWrapper
 from utils.Training import train_val_dl_models, train_with_kfold_val_dl_models, evaluate_on_test_dataset
 import xgboost as xgb
 from sklearn.svm import SVC
@@ -127,13 +127,13 @@ class My_training:
                 if save_ckpt: torch.save(self.mlp_model.state_dict(), f"{ckpt}/{self.mlp_model.__class__.__name__}_{target_col}.pth")
         logging.info(f'Model Fitted.')
 
-    def display_metrics(self, all_outputs, isTest=False, savefig=True):
+    def display_metrics(self, all_outputs, initial=None, savefig=True):
         logging.info(f'Generating Metrics and Figures.')
         performance_records = {} 
         for model in all_outputs:
             logging.info(15*'='+f" {model} "+ 15*'=')
             a_output = all_outputs[model]
-            (cm, auroc, perf) = ('cm_test', 'auroc_test', 'performance_test') if isTest else ('cm', 'auroc', 'performance')
+            (cm, auroc, perf) = (f'cm_{initial}', f'auroc_{initial}', f'performance_{initial}') if initial else ('cm', 'auroc', 'performance')
             performance_records[model] = generate_cm(a_output, f'{ckpt}/{model}_{cm}.png')
             generate_auroc(a_output, model, f'{ckpt}/{model}_{auroc}.png')
             performance_df = pd.DataFrame(performance_records)
@@ -151,24 +151,41 @@ def kfold_train(emb, models, demo):
     test_dataset = Dataset('./processed_data/2-splits/pandora_test.csv', my_train.emb_model, my_train.traits, my_train.demo)    
 
     logging.info(50*"*")
-    train_outtputs, test_outputs, selected_features = {'mlp':{}}, {'mlp':{}}, {}
+    train_outtputs, test_outputs, cal_test_outputss, selected_features = {'mlp':{}}, {'mlp':{}}, {'mlp':{}}, {}
     for target_col in my_train.traits:
         logging.info(f'{10*"-"} {target_col} {10*"-"}')
+        #feature selection
         features = my_train.select_features(dataset.X, dataset.Y[[target_col]])
         selected_features[target_col] = features
         logging.info(f'Selected Features for {target_col} : {len(features)}')
+
+        #Train
         X, y = my_train.prepare_dataset(dataset.X[features], dataset.contextual_emb, dataset.Y[[target_col]])
-        mlp_model = MLP(input_size=X.shape[1], hidden_size=128, output_size=1, dropout_rate=0.5)
-        mlp_acc, y_pred, y_probas, y_val = train_with_kfold_val_dl_models(mlp_model, X, y)
-        logging.info(f"Val Accuracy: {target_col}: {mlp_acc}")
-        train_outtputs['mlp'][target_col] = (y_val, y_pred, y_probas)
+        mlpWrapper = MLPWrapper(model=MLP(input_size=X.shape[1], hidden_size=128, output_size=1, dropout_rate=0.5))
+        _, y_pred, y_prob, y_val = mlpWrapper.fit(X, y)
+        train_outtputs['mlp'][target_col] = (y_val, y_pred, y_prob)
+        logging.info(f"Val Accuracy: {target_col}: {accuracy_score(y_val, y_pred)}")
+
         #Evaluate
         X_test, y_test = my_train.prepare_dataset(test_dataset.X[features], test_dataset.contextual_emb, test_dataset.Y[[target_col]])
-        acc, preds, probas = evaluate_on_test_dataset(mlp_model, X_test, y_test)
-        test_outputs['mlp'][target_col] = (y_test, preds, probas)
-        logging.info(f"Test Accuracy: {target_col}: {acc}")
+        y_pred, y_prob = mlpWrapper.predict(X_test), mlpWrapper.predict_proba(X_test)
+        test_outputs['mlp'][target_col] = (y_test, y_pred, y_prob)
+        display_calibration(y_test, y_prob, target_col, f'{ckpt}/uncalibrated_{target_col}.png')
+        logging.info(f"Test Accuracy: {target_col}: {accuracy_score(y_test, y_pred)}")
+
+        # #Calibrate
+        # from sklearn.calibration import CalibratedClassifierCV
+        # mlpWrapper = MLPWrapper(model=MLP(input_size=X.shape[1], hidden_size=128, output_size=1, dropout_rate=0.5))
+        # calibrated_model = CalibratedClassifierCV(base_estimator=mlpWrapper, method='sigmoid', cv=5)
+        # calibrated_model.fit(X, y)
+        # y_pred, y_prob = calibrated_model.predict(X_test), calibrated_model.predict_proba(X_test)
+        # y_prob = y_prob[:,1]
+        # cal_test_outputss['mlp'][target_col] = (y_test, y_pred, y_prob)
+        # display_calibration(y_test, y_prob, target_col, f'{ckpt}/calibrated_{target_col}.png')
+        
     my_train.display_metrics(train_outtputs)
-    my_train.display_metrics(test_outputs, isTest=True)
+    my_train.display_metrics(test_outputs, initial='test')
+    # my_train.display_metrics(cal_test_outputss, initial='clb')
     # pd.DataFrame(selected_features).to_csv(f"{ckpt}/selected_features.csv")
     logging.info(f'selected_features :{selected_features}')
    
@@ -197,7 +214,7 @@ if __name__ == "__main__":
     try:
         emb = sys.argv[1]
         models = sys.argv[2]
-        kfold = True #sys.argv[3]
+        kfold = False #sys.argv[3]
         demo = 100
         print(emb, models, kfold, demo)
         emb_models = {'1':'roberta-base', '2':'bert-base-uncased', '3':'vinai/bertweet-base', '4':'xlnet-base-cased'}
