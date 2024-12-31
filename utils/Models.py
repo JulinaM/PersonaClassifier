@@ -2,7 +2,7 @@ import torch.nn as nn
 import torch
 import numpy as np
 from sklearn.base import BaseEstimator, ClassifierMixin
-from utils.Training import train_with_kfold_val_dl_models, train_val_dl_models, make_prediction
+from utils.Training import train_val_kfold, train_val, predict
 
 class MLP(nn.Module):
     def __init__(self, input_size, hidden_size, output_size, dropout_rate=0.3):
@@ -62,7 +62,7 @@ class BiLSTMClassifier(nn.Module):
         last_hidden_state = lstm_output[:, -1, :]  # Shape: (batch_size, hidden_dim * 2)
         last_hidden_state = self.dropout(last_hidden_state)
         output = self.fc(last_hidden_state)  
-        output = self.sigmoid(output)
+        # output = self.sigmoid(output)
         return output
 
 # # Test model Initialize model
@@ -86,16 +86,16 @@ class MLPWrapper(BaseEstimator, ClassifierMixin):
     def fit(self, X, y):
         self.classes_ = np.unique(y)  # Unique class labels
         if self.kFold:
-            return train_with_kfold_val_dl_models(self.model, X, y, 5, self.batch_size, self.epochs, self.lr)
+            return train_val_kfold(self.model, X, y, 5, self.batch_size, self.epochs, self.lr)
         else:   
-            return train_val_dl_models(self.model, X, y, self.batch_size, self.epochs, self.lr)
+            return train_val(self.model, X, y, self.batch_size, self.epochs, self.lr)
 
     def predict(self, X):
-        pred, _ = make_prediction(self.model, X)
+        pred, _ = predict(self.model, X)
         return pred
         # return self.classes_[pred]  
     
     def predict_proba(self, X):
-        _, probas = make_prediction(self.model, X)
+        _, probas = predict(self.model, X)
         return probas
 
