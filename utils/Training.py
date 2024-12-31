@@ -78,8 +78,9 @@ def evaluate_on_test_dataset(model, X, y, batch_size=32, threshold=0.5):
     test_acc, _, test_preds, test_probas, _ = validate_one_epoch(model, test_loader, criterion=None, threshold=threshold)
     return test_acc, torch.cat(test_preds), torch.cat(test_probas)
 
-def train_val_dl_models(model, X_train, y_train, X_val, y_val, ckpt, batch_size=32, epochs=32, lr=0.001, max_grad_norm=1.0):
+def train_val_dl_models(model, X, y, batch_size=32, epochs=32, lr=0.001, max_grad_norm=1.0):
     logging.info(f'{model.__class__.__name__}; lr={lr}, batch_size={batch_size}')
+    X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.1, shuffle=True, random_state=42)
     train_dataset = TensorDataset(torch.tensor(X_train, dtype=torch.float32), torch.tensor(y_train, dtype=torch.float32))
     val_dataset = TensorDataset(torch.tensor(X_val, dtype=torch.float32), torch.tensor(y_val, dtype=torch.float32))
     train_loader =  DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
@@ -93,14 +94,14 @@ def train_val_dl_models(model, X_train, y_train, X_val, y_val, ckpt, batch_size=
         train_accuracy, train_loss = train_one_epoch(model, train_loader, criterion, optimizer, max_grad_norm)
         train_accuracies.append(train_accuracy)
 
-        val_accuracy, val_loss, val_preds, val_probas, _ = validate_one_epoch(model, val_loader, criterion)
+        val_accuracy, val_loss, val_preds, val_probas, val_targets = validate_one_epoch(model, val_loader, criterion)
         val_accuracies.append(val_accuracy)
         if epoch % 4 == 0:
             logging.info(f'Epoch: [{epoch + 1}/{epochs}], Train:: Loss: {train_loss:.4f}, Acc:{train_accuracy:.4f}, and  Val:: Loss: {val_loss:.4f}, Acc: {val_accuracy:.4f} ')
         if early_stopper.early_stop(val_loss):             
             break
     # display_acc_curve(train_accuracies, val_accuracies, epoch, ckpt)
-    return val_accuracy, torch.cat(val_preds), torch.cat(val_probas)
+    return val_accuracy, torch.cat(val_preds), torch.cat(val_probas), torch.cat(val_targets)
 
 def display_acc_curve(train_accuracies, val_accuracies, num_epochs, ckpt):
     import matplotlib.pyplot as plt

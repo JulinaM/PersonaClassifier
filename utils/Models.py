@@ -72,7 +72,7 @@ class BiLSTMClassifier(nn.Module):
 # print(output.shape)  # Expected output: (batch_size, output_dim)
 
 class MLPWrapper(BaseEstimator, ClassifierMixin):
-    def __init__(self, model, epochs=32, batch_size=32, lr=0.001, device=None):
+    def __init__(self, model, kFold=False, epochs=32, batch_size=32, lr=0.001, device=None):
         self.model = model
         # self.optimizer_class = optimizer_class
         # self.criterion = criterion
@@ -81,10 +81,14 @@ class MLPWrapper(BaseEstimator, ClassifierMixin):
         self.lr = lr
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         self.model.to(self.device)
+        self.kFold = kFold
     
     def fit(self, X, y):
         self.classes_ = np.unique(y)  # Unique class labels
-        return train_with_kfold_val_dl_models(self.model, X, y, 5, self.batch_size, self.epochs, self.lr)
+        if self.kFold:
+            return train_with_kfold_val_dl_models(self.model, X, y, 5, self.batch_size, self.epochs, self.lr)
+        else:   
+            return train_val_dl_models(self.model, X, y, self.batch_size, self.epochs, self.lr)
 
     def predict(self, X):
         pred, _ = make_prediction(self.model, X)

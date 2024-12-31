@@ -7,7 +7,9 @@ import torch.nn as nn
 from transformers import AutoTokenizer, AutoModel
 import torch
 from sklearn.model_selection import train_test_split, KFold
-from sklearn.feature_selection import SelectFromModel, SelectKBest, f_classif, mutual_info_classif, VarianceThreshold
+from sklearn.feature_selection import SelectFromModel, SelectKBest, f_classif, mutual_info_classif, VarianceThreshold, RFECV
+from sklearn.linear_model import LogisticRegression
+from sklearn.model_selection import StratifiedKFold
 
 class PreProcessor:
     def read_data(main_file, liwc_file, is_mypersonality=True):
@@ -162,7 +164,7 @@ class FeatureSelection:
     def variance_selection(X, threshold=0.16): #(.8 * (1 - .8))
         logging.info(f'Variance Feature Selection. Threshold used: {threshold}')
         selector = VarianceThreshold(threshold=threshold)
-        selected_features = selector.fit_transform(X)
+        selector.fit(X)
         return  X.columns[selector.get_support()]
 
     def mutual_info_selection(X, y, threshold=0.001):
@@ -184,8 +186,24 @@ class FeatureSelection:
     def hybrid_selection(X, y):
         logging.info(f'Hybrid method combining SelectFromModel and Logistic Regression')
         selector = SelectFromModel(LogisticRegression(penalty="l2", C=0.1))
-        X_selected = selector.fit_transform(X, y)
+        selector.fit(X, y)
         return X.columns[selector.get_support()]
+
+    def get_optimal_features(X, y, clf=LogisticRegression(), folds=5):
+        min_features_to_select = 1  # Minimum number of features to consider
+        cv = StratifiedKFold(folds)
+        rfecv = RFECV(
+            estimator=clf,
+            step=1,
+            cv=cv,
+            scoring="accuracy",
+            min_features_to_select=min_features_to_select,
+            n_jobs=2,
+        )
+        rfecv.fit(X, y)
+        print(f"Optimal number of features: {rfecv.n_features_}")
+        # X_selected = rfecv.fit_transform(X, y)
+        # return X.columns[rfecv.get_support()]
 
 if __name__ == "__main__":
     try:
