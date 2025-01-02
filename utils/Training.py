@@ -83,7 +83,7 @@ def train_val(model, X, y, batch_size=32, epochs=32, lr=0.001, max_grad_norm=1.0
     criterion = nn.BCEWithLogitsLoss()  # criterion = nn.BCELoss()  
     optimizer = optim.Adam(model.parameters(), lr=lr)
     train_accuracies, val_accuracies = [], []
-    early_stopper = EarlyStopper(patience=3, min_delta=0)
+    early_stopper = EarlyStopper(patience=3, min_delta=0.001)
     for epoch in range(epochs):
         train_accuracy, train_loss = _train_one_epoch(model, train_loader, criterion, optimizer, max_grad_norm)
         train_accuracies.append(train_accuracy)
@@ -100,19 +100,20 @@ def train_val(model, X, y, batch_size=32, epochs=32, lr=0.001, max_grad_norm=1.0
 def train_val_kfold(model, X, y, k_folds=5, batch_size=32, epochs=16, lr=0.001, max_grad_norm=1.0):
     logging.info(f'{model.__class__.__name__}; lr={lr}, batch_size={batch_size}, k_folds={k_folds}')
     dataset = TensorDataset(torch.tensor(X, dtype=torch.float32), torch.tensor(y, dtype=torch.float32))
+    targets = np.array([target for _, target in dataset]) 
 
     kf = StratifiedKFold(n_splits=k_folds, shuffle=True, random_state=42)
     fold_results = {}
     early_stopper = EarlyStopper(patience=3, min_delta=0.001)
+    criterion = nn.BCEWithLogitsLoss()  
+    optimizer = optim.Adam(model.parameters(), lr=lr)
 
-    for fold, (train_idx, val_idx) in enumerate(kf.split(dataset)):
+    for fold, (train_idx, val_idx) in enumerate(kf.split(dataset, targets)):
         train_subset = Subset(dataset, train_idx)
         val_subset = Subset(dataset, val_idx)
         train_loader = DataLoader(train_subset, batch_size=batch_size, shuffle=True)
         val_loader = DataLoader(val_subset, batch_size=batch_size, shuffle=False)
 
-        criterion = nn.BCEWithLogitsLoss()  
-        optimizer = optim.Adam(model.parameters(), lr=lr)
         for epoch in range(epochs):
             train_accuracy, train_loss = _train_one_epoch(model, train_loader, criterion, optimizer, max_grad_norm)
 
@@ -122,7 +123,9 @@ def train_val_kfold(model, X, y, k_folds=5, batch_size=32, epochs=16, lr=0.001, 
         if early_stopper.early_stop(val_loss):   
             logging.info(f'For {fold+1}, Early stopping at epoch {epoch+1}' )
             break
-    # logging.info(fold_results)
+    avg_val_acc = sum(fold['val_accuracy'] for fold in fold_results.values()) / k_folds
+    avg_val_loss = sum(fold['val_loss'] for fold in fold_results.values()) / k_folds
+    logging.info(f'Average Val acc: {avg_val_acc} and Val loss: {avg_val_loss}')
     return val_accuracy, torch.cat(val_preds), torch.cat(val_probas), torch.cat(val_targets)
 
 def _display_acc_curve(train_accuracies, val_accuracies, num_epochs, ckpt):

@@ -3,6 +3,10 @@ import torch
 import numpy as np
 from sklearn.base import BaseEstimator, ClassifierMixin
 from utils.Training import train_val_kfold, train_val, predict
+import logging
+from skorch import NeuralNetClassifier
+import torch.nn as nn
+import torch
 
 class MLP(nn.Module):
     def __init__(self, input_size, hidden_size, output_size, dropout_rate=0.3):
@@ -99,3 +103,11 @@ class MLPWrapper(BaseEstimator, ClassifierMixin):
         _, probas = predict(self.model, X)
         return probas
 
+# mlp = MLP(input_size=X.shape[1], hidden_size=128, output_size=1, dropout_rate=0.5)
+# skorchMLP = NeuralNetClassifier(
+#     mlp,
+#     criterion=nn.BCEWithLogitsLoss,
+#     optimizer=torch.optim.Adam,
+#     lr=0.001,
+#     max_epochs=32,
+# )
