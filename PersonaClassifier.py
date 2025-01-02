@@ -38,6 +38,7 @@ class Dataset:
         self.contextual_emb = PreProcessor.process_embeddings(df, emb_model) if emb_model else []
         self.X = df.drop(['Unnamed: 0', 'STATUS'] + targets, axis=1)
         self.Y = df[targets]
+        self.ORIGINAL = df[['STATUS'] + targets]
         logging.info(f'X Shape: {self.X.shape}, Y Shape: {self.Y.shape},  Contextual Emb Shape: {self.contextual_emb.shape if emb_model else []}')
 
 class My_training:
@@ -48,6 +49,7 @@ class My_training:
         self.demo = demo
         self.all_outputs ={}
         self.test_outputs ={}
+        self.test_df = pd.DataFrame()
         for model in model_list:
             self.all_outputs[model] = {}
             self.test_outputs[model] = {}
@@ -128,6 +130,7 @@ class My_training:
                 pred, probs = self.mlpWrapper.predict(X), self.mlpWrapper.predict_proba(X)
             display_calibration(y, probs, target_col, f'{ckpt}/calibration/{model}_{target_col}.png')
             self.test_outputs[model][target_col] = (y, pred, probs)
+            self.test_df[f'{model}_{target_col}'] = pred
             logging.info(f'{model} Test Acc: {accuracy_score(y, pred):.2f}')
         logging.info(f'Evaluation completed.')
 
@@ -149,11 +152,12 @@ class My_training:
             #     logging.info(f'For {best_model_row["Classifier"]}, {best_model_row["Model"]},  {best_model_row["Accuracy"]}')
 
 def kfold_train(emb, models, demo):
+    from skorch import NeuralNetClassifier
     logging.info(f'K-Fold Training started: {emb} {models} {demo}')
     my_train = My_training(model_list=models, emb_model=emb, demo=demo)
     dataset = Dataset('./processed_data/2-splits/pandora_train_val.csv', my_train.emb_model, my_train.traits, my_train.demo)    
     test_dataset = Dataset('./processed_data/2-splits/pandora_test.csv', my_train.emb_model, my_train.traits, my_train.demo)    
-
+    my_train.test_df = test_dataset.ORIGINAL
     logging.info(50*"*")
     train_outtputs, test_outputs, cal_test_outputss, selected_features = {'mlp':{}}, {'mlp':{}}, {'mlp':{}}, {}
     for target_col in my_train.traits:
@@ -165,32 +169,35 @@ def kfold_train(emb, models, demo):
 
         #Train
         X, y = my_train.prepare_dataset(dataset.X[features], dataset.contextual_emb, dataset.Y[[target_col]])
-        mlpWrapper = MLPWrapper(model=MLP(input_size=X.shape[1], hidden_size=128, output_size=1, dropout_rate=0.5), kFold=True)
+        mlp = MLP(input_size=X.shape[1], hidden_size=128, output_size=1, dropout_rate=0.5)
+        mlpWrapper = MLPWrapper(model=mlp, kFold=True)
         _, y_pred, y_prob, y_val = mlpWrapper.fit(X, y)
         train_outtputs['mlp'][target_col] = (y_val, y_pred, y_prob)
         logging.info(f"Val Accuracy: {target_col}: {accuracy_score(y_val, y_pred)}")
 
-        #Evaluate
+        # #Evaluate
         X_test, y_test = my_train.prepare_dataset(test_dataset.X[features], test_dataset.contextual_emb, test_dataset.Y[[target_col]])
         y_pred, y_prob = mlpWrapper.predict(X_test), mlpWrapper.predict_proba(X_test)
         test_outputs['mlp'][target_col] = (y_test, y_pred, y_prob)
+        my_train.test_df[f'mlp_{target_col}'] = y_pred
         display_calibration(y_test, y_prob, target_col, f'{ckpt}/calibration/mlp_{target_col}.png')
         logging.info(f"Test Accuracy: {target_col}: {accuracy_score(y_test, y_pred)}")
 
         # #Calibrate
-        # from sklearn.calibration import CalibratedClassifierCV
-        # mlpWrapper = MLPWrapper(model=MLP(input_size=X.shape[1], hidden_size=128, output_size=1, dropout_rate=0.5))
-        # calibrated_model = CalibratedClassifierCV(base_estimator=mlpWrapper, method='sigmoid', cv=5)
-        # calibrated_model.fit(X, y)
-        # y_pred, y_prob = calibrated_model.predict(X_test), calibrated_model.predict_proba(X_test)
-        # y_prob = y_prob[:,1]
-        # cal_test_outputss['mlp'][target_col] = (y_test, y_pred, y_prob)
-        # display_calibration(y_test, y_prob, target_col, f'{ckpt}/calibrated_{target_col}.png')
+        from sklearn.calibration import CalibratedClassifierCV
+        # mlpWrapper = MLPWrapper(model=MLP(input_size=X.shape[1], hidden_size=128, output_size=1, dropout_rate=0.5), kFold=False)
+        calibrated_model = CalibratedClassifierCV(mlpWrapper, method='isotonic', cv="prefit")
+        calibrated_model.fit(X, y)
+        y_pred, y_prob = calibrated_model.predict(X_test), calibrated_model.predict_proba(X_test)
+        cal_test_outputss['mlp'][target_col] = (y_test, y_pred, y_prob[:,1])
+        # my_train.test_df[f'mlp_calp_{target_col}'] = y_prob
+        display_calibration(y_test, y_prob[:,1], target_col, f'{ckpt}/calibration/cal_{target_col}.png')
         
     my_train.display_metrics(train_outtputs, initial='val')
     my_train.display_metrics(test_outputs, initial='test')
     # my_train.display_metrics(cal_test_outputss, initial='clb')
     # pd.DataFrame(selected_features).to_csv(f"{ckpt}/selected_features.csv")
+    my_train.test_df.to_csv(f'{ckpt}/prediction_test.csv')
     logging.info(f'selected_features :{selected_features}')
    
 def train(emb, models, demo, kFold):
@@ -198,6 +205,7 @@ def train(emb, models, demo, kFold):
     my_train = My_training(model_list=models, emb_model=emb, demo=demo)
     train_set = Dataset('./processed_data/2-splits/pandora_train_val.csv', my_train.emb_model, my_train.traits, my_train.demo)   
     test_set = Dataset('./processed_data/2-splits/pandora_test.csv', my_train.emb_model, my_train.traits, my_train.demo)    
+    my_train.test_df  = test_set.ORIGINAL
 
     logging.info(50*"*")
     selected_features ={}
@@ -216,9 +224,11 @@ def train(emb, models, demo, kFold):
         #test model
         X_test, y_test = my_train.prepare_dataset(test_set.X[features], test_set.contextual_emb, test_set.Y[[target_col]])
         my_train.evaluate_models(X_test, y_test, target_col)
+        
         logging.info(50*"-")
     my_train.display_metrics(my_train.all_outputs,  initial='val')
     my_train.display_metrics(my_train.test_outputs, initial='test')
+    my_train.test_df.to_csv(f'{ckpt}/prediction_test.csv')
     # pd.DataFrame(selected_features).to_csv(f"{ckpt}/selected_features.csv")
     logging.info(f'selected_features :{selected_features}')
 
