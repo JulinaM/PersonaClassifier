@@ -72,7 +72,7 @@ def predict(model, X, threshold=0.5):
         pred = (probs > threshold).float() 
     return pred.numpy(), probs.numpy()
 
-def train_val(model, X, y, batch_size=32, epochs=32, lr=0.001, max_grad_norm=1.0):
+def train_val(model, X, y, batch_size, epochs, lr, max_grad_norm=1.0):
     logging.info(f'{model.__class__.__name__}; lr={lr}, batch_size={batch_size}')
     X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.1, shuffle=True, random_state=42)
     train_dataset = TensorDataset(torch.tensor(X_train, dtype=torch.float32), torch.tensor(y_train, dtype=torch.float32))
@@ -97,7 +97,7 @@ def train_val(model, X, y, batch_size=32, epochs=32, lr=0.001, max_grad_norm=1.0
     # _display_acc_curve(train_accuracies, val_accuracies, epoch, ckpt)
     return val_accuracy, torch.cat(val_preds), torch.cat(val_probas), torch.cat(val_targets)
 
-def train_val_kfold(model, X, y, k_folds=5, batch_size=32, epochs=16, lr=0.001, max_grad_norm=1.0):
+def train_val_kfold(model, X, y, k_folds, batch_size, epochs, lr, max_grad_norm=1.0):
     logging.info(f'{model.__class__.__name__}; lr={lr}, batch_size={batch_size}, k_folds={k_folds}')
     dataset = TensorDataset(torch.tensor(X, dtype=torch.float32), torch.tensor(y, dtype=torch.float32))
     targets = np.array([target for _, target in dataset]) 
@@ -126,7 +126,7 @@ def train_val_kfold(model, X, y, k_folds=5, batch_size=32, epochs=16, lr=0.001, 
     avg_val_acc = sum(fold['val_accuracy'] for fold in fold_results.values()) / k_folds
     avg_val_loss = sum(fold['val_loss'] for fold in fold_results.values()) / k_folds
     logging.info(f'Average Val acc: {avg_val_acc} and Val loss: {avg_val_loss}')
-    return val_accuracy, torch.cat(val_preds), torch.cat(val_probas), torch.cat(val_targets)
+    return avg_val_acc, torch.cat(val_preds), torch.cat(val_probas), torch.cat(val_targets)
 
 def _display_acc_curve(train_accuracies, val_accuracies, num_epochs, ckpt):
     import matplotlib.pyplot as plt
