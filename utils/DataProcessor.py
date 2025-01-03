@@ -21,7 +21,7 @@ class PreProcessor:
             liwc_df = liwc_df.drop(['Unnamed: 0', '#AUTHID', 'ColumnID', 'STATUS'], axis=1)
         else:
             main_df = pd.read_csv(main_file)
-            main_df.drop(columns=['#AUTHID'], inplace=True)
+            main_df.drop(columns=['Unnamed: 0', '#AUTHID'], inplace=True)
             cols = ['cOPN', 'cEXT', 'cNEU', 'cAGR', 'cCON']
             for col in cols:
                 mean_value = main_df[col].mean()
@@ -215,15 +215,22 @@ if __name__ == "__main__":
         liwc_file = "data/LIWC_pandora_to_big5_oct_24.csv"
         logging.info(f"Reading RAW files: {main_file} and {liwc_file}")
         df = PreProcessor.read_data(main_file, liwc_file, False)
+
+        main_file = "data/mypersonality.csv"
+        liwc_file = "data/LIWC_mypersonality_oct_2.csv"
+        logging.info(f"Reading RAW files: {main_file} and {liwc_file}")
+        df1 = PreProcessor.read_data(main_file, liwc_file, True)
+
+        df = pd.concat([df, df1], ignore_index=True)
         df = PreProcessor.process_NRC_emotion(df)
         df = PreProcessor.process_NRC_VAD(df)
         df = PreProcessor.process_VADER_sentiment(df)
         df =  PreProcessor.clean_up_text(df)
         # df_train, df_val, df_test = PreProcessor.split_dataset(df, 0.1)
         df_train, df_test = train_test_split(df, test_size=0.1, shuffle=True, random_state=42)
-        df_train.to_csv('processed_data/2-splits/pandora_train_val.csv')
+        df_train.to_csv('processed_data/rd_fb/pandora_train_val.csv')
         # df_val.to_csv('data/processed_data/3-splits/pandora_val.csv')
-        df_test.to_csv('processed_data/2-splits/pandora_test.csv')
+        df_test.to_csv('processed_data/rd_fb/pandora_test.csv')
         logging.info(f"All files saved in process_data dir.")
     except:
         traceback.print_exc()
