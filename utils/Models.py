@@ -4,9 +4,6 @@ import numpy as np
 from sklearn.base import BaseEstimator, ClassifierMixin
 from utils.Training import train_val_kfold, train_val, predict
 import logging
-from skorch import NeuralNetClassifier
-import torch.nn as nn
-import torch
 
 class MLP(nn.Module):
     def __init__(self, input_size, hidden_size, output_size, dropout_rate=0.3):
@@ -76,7 +73,7 @@ class BiLSTMClassifier(nn.Module):
 # print(output.shape)  # Expected output: (batch_size, output_dim)
 
 class MLPWrapper(BaseEstimator, ClassifierMixin):
-    def __init__(self, model, kFold=False, epochs=32, batch_size=32, lr=0.001, device=None):
+    def __init__(self, model, kFold=5, epochs=32, batch_size=16, lr=0.001, device=None):
         self.model = model
         # self.optimizer_class = optimizer_class
         # self.criterion = criterion
@@ -90,7 +87,7 @@ class MLPWrapper(BaseEstimator, ClassifierMixin):
     def fit(self, X, y):
         self.classes_ = np.unique(y)  # Unique class labels
         if self.kFold:
-            return train_val_kfold(self.model, X, y, 5, self.batch_size, self.epochs, self.lr)
+            return train_val_kfold(self.model, X, y, self.kFold, self.batch_size, self.epochs, self.lr)
         else:   
             return train_val(self.model, X, y, self.batch_size, self.epochs, self.lr)
 
@@ -103,6 +100,9 @@ class MLPWrapper(BaseEstimator, ClassifierMixin):
         _, probas = predict(self.model, X)
         return probas
 
+# from skorch import NeuralNetClassifier
+# import torch.nn as nn
+# import torch
 # mlp = MLP(input_size=X.shape[1], hidden_size=128, output_size=1, dropout_rate=0.5)
 # skorchMLP = NeuralNetClassifier(
 #     mlp,
@@ -111,3 +111,30 @@ class MLPWrapper(BaseEstimator, ClassifierMixin):
 #     lr=0.001,
 #     max_epochs=32,
 # )
+
+class IdentityEstimator(BaseEstimator, ClassifierMixin):
+    '''
+    An identity estimator used for calibrating probability data
+    '''
+    def __init__(self):
+        self.classes_= [0, 1]
+        # pass
+ 
+    def __getstate__(self):
+        # Copy the object's state from self.__dict__ which contains
+        # all our instance attributes. Always use the dict.copy()
+        # method to avoid modifying the original state.
+        state = self.__dict__.copy()
+        return state
+ 
+    def __setstate__(self, state):
+        # Restore instance attributes
+        self.__dict__.update(state)
+ 
+    def fit(self, X, y, sample_weight=None):
+        return self
+ 
+    def predict_proba(self, X):
+        assert X.shape[1] == 1
+        probs = np.concatenate((1 - X, X), axis=1)
+        return probs
