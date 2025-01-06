@@ -91,13 +91,13 @@ class MLPWrapper(BaseEstimator, ClassifierMixin):
         else:   
             return train_val(self.model, X, y, self.batch_size, self.epochs, self.lr)
 
-    def predict(self, X):
-        pred, _ = predict(self.model, X)
+    def predict(self, X, threshold=0.5):
+        pred, _ = predict(self.model, X, threshold)
         return pred
         # return self.classes_[pred]  
     
-    def predict_proba(self, X):
-        _, probas = predict(self.model, X)
+    def predict_proba(self, X, threshold=0.5):
+        _, probas = predict(self.model, X, threshold)
         return probas
 
 # from skorch import NeuralNetClassifier
