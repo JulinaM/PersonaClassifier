@@ -6,6 +6,14 @@ import re,os, glob, traceback, nltk, logging, sys
 from sklearn.metrics import accuracy_score, confusion_matrix, ConfusionMatrixDisplay, precision_score, recall_score, f1_score, roc_curve, auc
 from sklearn.calibration import calibration_curve
 
+def calculate_threshold(y_true, y_scores):
+    fpr, tpr, thresholds = roc_curve(y_true, y_scores)
+    youden_index = tpr - fpr
+    optimal_idx = youden_index.argmax()
+    optimal_threshold = thresholds[optimal_idx]
+    logging.info(f"Optimal Threshold: {optimal_threshold}")
+    return optimal_threshold
+
 def display_calibration(y_test, y_prob, target, filepath=None):
     plt.figure(figsize=(8, 6))
     prob_true, prob_pred = calibration_curve(y_test, y_prob, n_bins=10, strategy='uniform')

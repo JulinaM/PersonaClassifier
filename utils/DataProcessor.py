@@ -85,6 +85,7 @@ class PreProcessor:
         emotion_counts_df = pd.DataFrame(emotion_counts_list.tolist())
         emotion_counts_df.fillna(0, inplace=True)
         emotion_counts_df = emotion_counts_df.astype(int)
+        logging.info(f'Adding NRC emotions: {emotion_counts_df.columns}')
         df = pd.concat([df, emotion_counts_df], axis=1)
         logging.info(f'NRC-Emotion shape={df.shape}')
         return df
@@ -190,6 +191,7 @@ class FeatureSelection:
         return X.columns[selector.get_support()]
 
     def get_optimal_features(X, y, clf=LogisticRegression(), folds=5):
+        logging.info(f"Using RFECV for feature selection.")
         min_features_to_select = 1  # Minimum number of features to consider
         cv = StratifiedKFold(folds)
         rfecv = RFECV(
@@ -203,7 +205,7 @@ class FeatureSelection:
         rfecv.fit(X, y)
         print(f"Optimal number of features: {rfecv.n_features_}")
         # X_selected = rfecv.fit_transform(X, y)
-        # return X.columns[rfecv.get_support()]
+        return X.columns[rfecv.get_support()]
 
 if __name__ == "__main__":
     try:
@@ -211,26 +213,26 @@ if __name__ == "__main__":
         timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
         logging.basicConfig(filename=f'log/DataProcessor_log_{timestamp}.log', level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-        main_file = "data/pandora_to_big5.csv"
-        liwc_file = "data/LIWC_pandora_to_big5_oct_24.csv"
-        logging.info(f"Reading RAW files: {main_file} and {liwc_file}")
-        df = PreProcessor.read_data(main_file, liwc_file, False)
+        # main_file = "data/pandora_to_big5.csv"
+        # liwc_file = "data/LIWC_pandora_to_big5_oct_24.csv"
+        # logging.info(f"Reading RAW files: {main_file} and {liwc_file}")
+        # df = PreProcessor.read_data(main_file, liwc_file, False)
 
         main_file = "data/mypersonality.csv"
         liwc_file = "data/LIWC_mypersonality_oct_2.csv"
         logging.info(f"Reading RAW files: {main_file} and {liwc_file}")
-        df1 = PreProcessor.read_data(main_file, liwc_file, True)
+        df = PreProcessor.read_data(main_file, liwc_file, True)
 
-        df = pd.concat([df, df1], ignore_index=True)
+        # df = pd.concat([df, df1], ignore_index=True)
         df = PreProcessor.process_NRC_emotion(df)
         df = PreProcessor.process_NRC_VAD(df)
         df = PreProcessor.process_VADER_sentiment(df)
         df =  PreProcessor.clean_up_text(df)
         # df_train, df_val, df_test = PreProcessor.split_dataset(df, 0.1)
         df_train, df_test = train_test_split(df, test_size=0.1, shuffle=True, random_state=42)
-        df_train.to_csv('processed_data/rd_fb/pandora_train_val.csv')
+        df_train.to_csv('processed_data/2-splits/mypersonality_train_val.csv')
         # df_val.to_csv('data/processed_data/3-splits/pandora_val.csv')
-        df_test.to_csv('processed_data/rd_fb/pandora_test.csv')
+        df_test.to_csv('processed_data/2-splits/mypersonality_test.csv')
         logging.info(f"All files saved in process_data dir.")
     except:
         traceback.print_exc()
