@@ -100,6 +100,9 @@ class MLPWrapper(BaseEstimator, ClassifierMixin):
         _, probas = predict(self.model, X, threshold)
         return probas
 
+    def predict_both(self, X, threshold=0.5):
+        return predict(self.model, X, threshold)
+
 # from skorch import NeuralNetClassifier
 # import torch.nn as nn
 # import torch

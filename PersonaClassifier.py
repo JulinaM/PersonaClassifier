@@ -14,7 +14,7 @@ import xgboost as xgb
 from sklearn.svm import SVC
 from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.model_selection import train_test_split, KFold
+from sklearn.model_selection import train_test_split, KFold, StratifiedKFold
 from sklearn.calibration import CalibratedClassifierCV
 global timestamp
 global ckpt 
@@ -34,11 +34,13 @@ hyperparameters = {
 class Dataset:
     def __init__(self, filepath, emb_model, targets, demo):
         logging.info(f'Processing  {filepath} Dataset.')
+        NRC_VAD = ['Valence', 'Arousal', 'Dominance']
+        NRC_emotions = ['anger', 'anticipation', 'disgust', 'fear', 'joy', 'negative', 'positive', 'sadness', 'surprise', 'trust', 'sent_score']
+        SENTIMENT = ['sent_score']
         df = pd.read_csv(filepath) 
         if demo: df = df.sample(demo)
         self.contextual_emb = PreProcessor.process_embeddings(df, emb_model) if emb_model else []
         self.X = df.drop(['Unnamed: 0', 'STATUS'] + targets, axis=1)
-        # self.X = df[['Valence', 'Arousal', 'Dominance', 'anger', 'anticipation', 'disgust', 'fear', 'joy', 'negative', 'positive', 'sadness', 'surprise', 'trust', 'sent_score']]
         self.Y = df[targets]
         self.ORIGINAL = df[['STATUS'] + targets]
         logging.info(f'X Shape: {self.X.shape}, Y Shape: {self.Y.shape},  Contextual Emb Shape: {self.contextual_emb.shape if emb_model else []}')
@@ -58,24 +60,24 @@ class My_training:
             self.test_outputs[model] = {}
             self.cal_outputs[model] = {}
 
-    def select_features(self, X, y):
-        return FeatureSelection.mutual_info_selection(X, y) #TODO experiment with other feature selection
+    def select_features(self, X, y, k):
+        return FeatureSelection.filter_selection(X, y, k) #TODO experiment with other feature selection
         # return FeatureSelection.variance_selection(X)
         # return FeatureSelection.get_optimal_features(X, y)
         # return X.columns
         
-    def prepare_dataset(self, stat_df, emb_df, y_df):
+    def prepare_dataset(self, stat_df, emb_df, y_df, features=None):
         # logging.info(f'{stat_df.shape}, {y_df.shape}, {emb_df.shape}')
-        scaler = StandardScaler() 
-        stat_features_scaled = scaler.fit_transform(stat_df) #TODO experiment with other tranformation like log
-        X = np.concatenate([stat_features_scaled, emb_df], axis=1)
-        y = np.array(y_df) 
-        y = y.ravel()  
-        logging.info(f'statistical embedding: {stat_features_scaled.shape}')
+        scaler = StandardScaler() #TODO experiment with other tranformation like log
+        X_df = pd.DataFrame(scaler.fit_transform(stat_df), columns=stat_df.columns)
+        if features is None: features = FeatureSelection.filter_selection(X_df, y_df, 5)
+        X = np.concatenate([X_df[features], emb_df], axis=1)
+        y = np.array(y_df).ravel()
+        logging.info(f'statistical embedding: {X_df[features].shape}')
         logging.info(f'contextual embedding: {emb_df.shape} ')
-        logging.info(f'total embedding X and y: {X.shape} and {y.shape}')
+        logging.info(f'Final shape X and y: {X.shape} and {y.shape}')
         logging.info(f'Data Preparation Completed.')
-        return X, y
+        return X, y, features
 
     def init_models(self, X_shape, kFold):
         for model in self.models:
@@ -120,7 +122,7 @@ class My_training:
             logging.info(f'{model} Val Acc: {accuracy_score(y_val, pred):.2f}')
         logging.info(f'Model Fitted.')
 
-    def evaluate_models(self, X, y, target_col):
+    def evaluate_models(self, X, y, target_col, calibrate=False):
         logging.info(f'Evaluating on Test Dataset.')
         for model in self.models:
             if model =='svm':
@@ -132,12 +134,12 @@ class My_training:
             elif model == 'xgb': 
                 pred, probs = self.xgb_model.predict(X), self.xgb_model.predict_proba(X)[:, 1]
             elif model == 'bilstm':   
-                pred, probs = self.bilstm_Wrapper.predict(X), self.bilstm_Wrapper.predict_proba(X)
+                pred, probs = self.bilstm_Wrapper.predict_both(X)
             elif model == 'mlp':  
                 # y_true, _, y_probs = self.all_outputs[model][target_col]
                 # threshold = calculate_threshold(y_true, y_probs)
-                pred, probs = self.mlpWrapper.predict(X), self.mlpWrapper.predict_proba(X)
-            generate_cal_result(y, pred, probs, target_col, f'{ckpt}/calibration/uncal_{model}_{target_col}.png')
+                pred, probs = self.mlpWrapper.predict_both(X)
+            if calibrate: generate_cal_result(y, pred, probs, target_col, f'{ckpt}/calibration/uncal_{model}_{target_col}.png')
             self.test_outputs[model][target_col] = (y, pred, probs)
             self.test_df[f'{model}_{target_col}'] = pred
             logging.info(f'{model} Test Acc: {accuracy_score(y, pred):.2f}')
@@ -152,8 +154,7 @@ class My_training:
         calibrated.fit(y_prob_val, y)
         y_cal_pred, y_cal_prob = calibrated.predict(y_prob_test), calibrated.predict_proba(y_prob_test)[:, 1]
         generate_cal_result(y_test, y_cal_pred, y_cal_prob, target_col, f'{ckpt}/calibration/cal_{model}_{target_col}.png' )
-        self.cal_outputs[model][target_col] = (y_test, y_cal_pred, y_cal_prob)
-        
+        self.cal_outputs[model][target_col] = (y_test, y_cal_pred, y_cal_prob)     
 
     def display_metrics(self, all_outputs, initial=None, savefig=True):
         logging.info(f'Generating Metrics and Figures.')
@@ -183,52 +184,80 @@ def generate_cal_result(y_true, y_pred, y_prob, target_col, filename):
     display_calibration(y_true, y_prob, target_col, filename)
 
 def kfold_train(emb, models, demo):
-    from skorch import NeuralNetClassifier
+    from utils.Training import _train_one_epoch, _validate_one_epoch, predict, EarlyStopper
+    from torch.utils.data import DataLoader, TensorDataset, Subset
+
     logging.info(f'K-Fold Training started: {emb} {models} {demo}')
     my_train = My_training(model_list=models, emb_model=emb, demo=demo)
     dataset = Dataset('./processed_data/2-splits/pandora_train_val.csv', my_train.emb_model, my_train.traits, my_train.demo)    
     test_dataset = Dataset('./processed_data/2-splits/pandora_test.csv', my_train.emb_model, my_train.traits, my_train.demo)    
     my_train.test_df = test_dataset.ORIGINAL
     logging.info(50*"*")
-    train_outtputs, test_outputs, cal_test_outputss, selected_features = {'mlp':{}}, {'mlp':{}}, {'mlp':{}}, {}
+
+    lr, epochs, batch_size, k_folds = 0.001, 32, 16, 5
+    val_outputs, test_outputs, cal_test_outputss, selected_features = {'mlp':{}}, {'mlp':{}}, {'mlp':{}}, {}
     for target_col in my_train.traits:
         logging.info(f'{10*"-"} {target_col} {10*"-"}')
-        #feature selection
-        features = my_train.select_features(dataset.X, dataset.Y[[target_col]])
-        selected_features[target_col] = features
-        logging.info(f'Selected Features for {target_col} : {len(features)}')
+        kf = StratifiedKFold(n_splits=k_folds, shuffle=True, random_state=42)
+        fold_results = {}
+        X, y, fs = my_train.prepare_dataset(dataset.X, dataset.contextual_emb, dataset.Y[[target_col]], features=[])
+        selected_features[target_col] = fs
+        for fold, (train_idx, val_idx) in enumerate(kf.split(X, y)):
+            X_train, y_train = Subset(X, train_idx), Subset(y, train_idx)
+            X_val, y_val = Subset(X, val_idx), Subset(y, val_idx)
 
-        #Train
-        X, y = my_train.prepare_dataset(dataset.X[features], dataset.contextual_emb, dataset.Y[[target_col]])
-        mlp = MLP(input_size=X.shape[1], hidden_size=128, output_size=1, dropout_rate=0.5)
-        mlpWrapper = MLPWrapper(model=mlp, kFold=True)
-        _, y_pred, y_prob, y_val = mlpWrapper.fit(X, y)
-        y_prob_val = mlpWrapper.predict_proba(X)
-        train_outtputs['mlp'][target_col] = (y_val, y_pred, y_prob)
-        logging.info(f"Val Accuracy: {target_col}: {accuracy_score(y_val, y_pred)}")
+            train_dataset = TensorDataset(torch.tensor(X_train, dtype=torch.float32), torch.tensor(y_train, dtype=torch.float32))
+            val_dataset = TensorDataset(torch.tensor(X_val, dtype=torch.float32), torch.tensor(y_val, dtype=torch.float32))
+            train_loader =  DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+            val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
 
-        # #Evaluate
-        X_test, y_test = my_train.prepare_dataset(test_dataset.X[features], test_dataset.contextual_emb, test_dataset.Y[[target_col]])
-        y_pred, y_prob = mlpWrapper.predict(X_test), mlpWrapper.predict_proba(X_test)
+            model = MLP(input_size=X.shape[1], hidden_size=128, output_size=1, dropout_rate=0.5)
+            criterion = torch.nn.BCEWithLogitsLoss()  
+            optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+            early_stopper = EarlyStopper(patience=3, min_delta=0.001)
+
+            for epoch in range(epochs):
+                train_acc, train_loss = _train_one_epoch(model, train_loader, criterion, optimizer, max_grad_norm=1.0)
+                val_acc, val_loss, val_preds, val_probas, val_targets = _validate_one_epoch(model, val_loader, criterion)
+                if epoch % 4 == 0:
+                    logging.info(f'Epoch: [{epoch + 1}/{epochs}], Train:: Loss: {train_loss:.4f}, Acc:{train_acc:.4f}, and  Val:: Loss: {val_loss:.4f}, Acc: {val_acc:.4f} ')
+                if early_stopper.early_stop(val_loss):             
+                    break
+            fold_results[fold] = {'train_loss': train_loss, 'train_acc': train_acc, 'val_loss': val_loss, 'val_acc': val_acc}
+            logging.info(f'Fold {fold+1}/{k_folds} - {fold_results[fold]}')
+
+        avg_val_acc = sum(fold['val_acc'] for fold in fold_results.values()) / k_folds
+        avg_val_loss = sum(fold['val_loss'] for fold in fold_results.values()) / k_folds
+        logging.info(f'Avg Val Acc: {avg_val_acc} and Val Loss: {avg_val_loss}')
+        val_outputs['mlp'][target_col] = (torch.cat(val_targets), torch.cat(val_preds), torch.cat(val_probas))
+
+        #Test
+        X_test, y_test, _ = my_train.prepare_dataset(test_dataset.X, test_dataset.contextual_emb, test_dataset.Y[[target_col]], selected_features[target_col])
+        y_pred, y_prob = predict(model, X_test)
         test_outputs['mlp'][target_col] = (y_test, y_pred, y_prob)
-        my_train.test_df[f'mlp_uncal_prob_{target_col}'] = y_pred
-        generate_cal_result(y_test, y_pred, y_prob, target_col, f'{ckpt}/calibration/uncal_{target_col}.png' )
-        logging.info(f"Test Accuracy: {target_col}: {accuracy_score(y_test, y_pred)}")
+        logging.info(f'Test Acc: {accuracy_score(y_test, y_pred):.2f}')
 
-        # #Calibrate
-        calibrated = CalibratedClassifierCV(base_estimator = IdentityEstimator(), method = 'sigmoid', cv = 5)
-        calibrated.fit(y_prob_val, y)
-        y_cal_pred, y_cal_prob = calibrated.predict(y_prob), calibrated.predict_proba(y_prob)[:, 1]
-        generate_cal_result(y_test, y_cal_pred, y_cal_prob, target_col, f'{ckpt}/calibration/cal_{target_col}.png' )
-        cal_test_outputss['mlp'][target_col] = (y_test, y_cal_pred, y_cal_prob)
-        my_train.test_df[f'mlp_cal_prob_{target_col}'] = y_cal_prob
-        
-    my_train.display_metrics(train_outtputs, initial='val')
+    my_train.display_metrics(val_outputs, initial='val')
     my_train.display_metrics(test_outputs, initial='test')
-    my_train.display_metrics(cal_test_outputss, initial='cal')
-    # pd.DataFrame(selected_features).to_csv(f"{ckpt}/selected_features.csv")
-    my_train.test_df.to_csv(f'{ckpt}/prediction_test.csv')
-    logging.info(f'selected_features :{selected_features}')
+
+    test_outputs = {'mlp':{}}
+    #Final Evaluation
+    for target_col in my_train.traits:
+        X, y, _ = my_train.prepare_dataset(dataset.X, dataset.contextual_emb, dataset.Y[[target_col]], features=[])
+        train_dataset = TensorDataset(torch.tensor(X, dtype=torch.float32), torch.tensor(y, dtype=torch.float32))
+        train_loader =  DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+        model = MLP(input_size=X.shape[1], hidden_size=128, output_size=1, dropout_rate=0.5)
+        criterion = torch.nn.BCEWithLogitsLoss()  
+        optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+        train_acc, train_loss = _train_one_epoch(model, train_loader, criterion, optimizer, max_grad_norm=1.0)
+        X_test, y_test, _ = my_train.prepare_dataset(test_dataset.X, test_dataset.contextual_emb, test_dataset.Y[[target_col]], [])
+        y_pred, y_prob = predict(model, X_test)
+        test_outputs['mlp'][target_col] = (y_test, y_pred, y_prob)
+        logging.info(f'Test Acc: {accuracy_score(y_test, y_pred):.2f}')
+    my_train.display_metrics(test_outputs, initial='final-test')
+
+
+    logging.info(f'{selected_features}')
    
 def train(emb, models, demo, kFold):
     logging.info(f'Eliminating LIWC features')
@@ -244,27 +273,25 @@ def train(emb, models, demo, kFold):
     selected_features ={}
     for target_col in my_train.traits:
         logging.info(f'{10*"-"} {target_col} {10*"-"}')
-        #feature_selection
-        features = my_train.select_features(train_set.X, train_set.Y[[target_col]] )
+        # Scale and Select features
+        X, y, features = my_train.prepare_dataset(train_set.X, train_set.contextual_emb, train_set.Y[[target_col]], [])
         selected_features[target_col] = features
-        logging.info(f'Selected Features for {target_col} : {len(features)}')
 
         #train and validate model
-        X, y = my_train.prepare_dataset(train_set.X[features], train_set.contextual_emb, train_set.Y[[target_col]])
         my_train.init_models(X_shape=X.shape[1], kFold=kFold)
         my_train.fit_models(X, y, target_col, save_ckpt=False)
 
         #test model
-        X_test, y_test = my_train.prepare_dataset(test_set.X[features], test_set.contextual_emb, test_set.Y[[target_col]])
+        X_test, y_test, _ = my_train.prepare_dataset(test_set.X, test_set.contextual_emb, test_set.Y[[target_col]], features)
         my_train.evaluate_models(X_test, y_test, target_col)
 
         #calibrate model 
-        my_train.calibrate_models(X, y, X_test, y_test, target_col)
+        # my_train.calibrate_models(X, y, X_test, y_test, target_col)
 
         logging.info(50*"-")
     my_train.display_metrics(my_train.all_outputs,  initial='val')
     my_train.display_metrics(my_train.test_outputs, initial='test')
-    my_train.display_metrics(my_train.cal_outputs, initial='cal')
+    # my_train.display_metrics(my_train.cal_outputs, initial='cal')
     # my_train.test_df.to_csv(f'{ckpt}/prediction_test.csv')
     # pd.DataFrame(selected_features).to_csv(f"{ckpt}/selected_features.csv")
     logging.info(f'selected_features :{selected_features}')
@@ -283,7 +310,9 @@ if __name__ == "__main__":
         print(emb, models, kFold, demo)
 
         timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
-        ckpt = f"checkpoint/{emb.split('-')[0]}-{timestamp}" if emb else f"checkpoint/{timestamp}"
+        folder = f"{emb.split('-')[0]}-{timestamp}" if emb else f"{timestamp}"
+        if demo: folder = f"{folder}_demo"
+        ckpt = f"checkpoint/{folder}"
         if not os.path.exists(ckpt):
             os.makedirs(f'{ckpt}/calibration/')
         logging.basicConfig(filename=f'{ckpt}/log_{timestamp}.log', level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')

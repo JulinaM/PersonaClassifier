@@ -179,8 +179,9 @@ class FeatureSelection:
         }).sort_values(by='Information Gain', ascending=False)
         return ig_df[ig_df['Information Gain'] > threshold]['Feature'].values
 
-    def filter_selection(X, y):
-        selector = SelectKBest(score_func=mutual_info_classif, k=10)
+    def filter_selection(X, y, k=10):
+        logging.info(f"Using SelectKBest for {k} feature selection.")
+        selector = SelectKBest(score_func=mutual_info_classif, k=k)
         selector.fit(X, y)
         return X.columns[selector.get_support()]
 
@@ -203,7 +204,7 @@ class FeatureSelection:
             n_jobs=2,
         )
         rfecv.fit(X, y)
-        print(f"Optimal number of features: {rfecv.n_features_}")
+        logging.info(f"Optimal number of features: {rfecv.n_features_}")
         # X_selected = rfecv.fit_transform(X, y)
         return X.columns[rfecv.get_support()]
 
