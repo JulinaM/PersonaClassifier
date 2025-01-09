@@ -16,6 +16,8 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split, KFold, StratifiedKFold
 from sklearn.calibration import CalibratedClassifierCV
+from utils.Training import _train_one_epoch, _validate_one_epoch, predict, EarlyStopper
+from torch.utils.data import DataLoader, TensorDataset, Subset
 global timestamp
 global ckpt 
 global logging
@@ -184,9 +186,6 @@ def generate_cal_result(y_true, y_pred, y_prob, target_col, filename):
     display_calibration(y_true, y_prob, target_col, filename)
 
 def kfold_train(emb, models, demo):
-    from utils.Training import _train_one_epoch, _validate_one_epoch, predict, EarlyStopper
-    from torch.utils.data import DataLoader, TensorDataset, Subset
-
     logging.info(f'K-Fold Training started: {emb} {models} {demo}')
     my_train = My_training(model_list=models, emb_model=emb, demo=demo)
     dataset = Dataset('./processed_data/2-splits/pandora_train_val.csv', my_train.emb_model, my_train.traits, my_train.demo)    
@@ -239,28 +238,9 @@ def kfold_train(emb, models, demo):
 
     my_train.display_metrics(val_outputs, initial='val')
     my_train.display_metrics(test_outputs, initial='test')
-
-    test_outputs = {'mlp':{}}
-    #Final Evaluation
-    for target_col in my_train.traits:
-        X, y, _ = my_train.prepare_dataset(dataset.X, dataset.contextual_emb, dataset.Y[[target_col]], features=[])
-        train_dataset = TensorDataset(torch.tensor(X, dtype=torch.float32), torch.tensor(y, dtype=torch.float32))
-        train_loader =  DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-        model = MLP(input_size=X.shape[1], hidden_size=128, output_size=1, dropout_rate=0.5)
-        criterion = torch.nn.BCEWithLogitsLoss()  
-        optimizer = torch.optim.Adam(model.parameters(), lr=lr)
-        train_acc, train_loss = _train_one_epoch(model, train_loader, criterion, optimizer, max_grad_norm=1.0)
-        X_test, y_test, _ = my_train.prepare_dataset(test_dataset.X, test_dataset.contextual_emb, test_dataset.Y[[target_col]], [])
-        y_pred, y_prob = predict(model, X_test)
-        test_outputs['mlp'][target_col] = (y_test, y_pred, y_prob)
-        logging.info(f'Test Acc: {accuracy_score(y_test, y_pred):.2f}')
-    my_train.display_metrics(test_outputs, initial='final-test')
-
-
     logging.info(f'{selected_features}')
    
 def train(emb, models, demo, kFold):
-    logging.info(f'Eliminating LIWC features')
     logging.info(f'Training started: emb:{emb} models:{models} demo:{demo} kFold:{kFold}')
     my_train = My_training(model_list=models, emb_model=emb, demo=demo)
     train_set = Dataset('./processed_data/2-splits/pandora_train_val.csv', my_train.emb_model, my_train.traits, my_train.demo)   
@@ -270,19 +250,18 @@ def train(emb, models, demo, kFold):
     my_train.test_df  = test_set.ORIGINAL
 
     logging.info(50*"*")
-    selected_features ={}
+    selected_features = {}
     for target_col in my_train.traits:
         logging.info(f'{10*"-"} {target_col} {10*"-"}')
         # Scale and Select features
-        X, y, features = my_train.prepare_dataset(train_set.X, train_set.contextual_emb, train_set.Y[[target_col]], [])
-        selected_features[target_col] = features
+        X, y, selected_features[target_col] = my_train.prepare_dataset(train_set.X, train_set.contextual_emb, train_set.Y[[target_col]])
 
         #train and validate model
         my_train.init_models(X_shape=X.shape[1], kFold=kFold)
         my_train.fit_models(X, y, target_col, save_ckpt=False)
 
         #test model
-        X_test, y_test, _ = my_train.prepare_dataset(test_set.X, test_set.contextual_emb, test_set.Y[[target_col]], features)
+        X_test, y_test, _ = my_train.prepare_dataset(test_set.X, test_set.contextual_emb, test_set.Y[[target_col]], selected_features[target_col])
         my_train.evaluate_models(X_test, y_test, target_col)
 
         #calibrate model 
@@ -296,13 +275,45 @@ def train(emb, models, demo, kFold):
     # pd.DataFrame(selected_features).to_csv(f"{ckpt}/selected_features.csv")
     logging.info(f'selected_features :{selected_features}')
 
+def final_test(emb, models, demo):
+    logging.info(f'Training started: emb:{emb} models:{models} demo:{demo} kFold:{kFold}')
+    my_train = My_training(model_list=models, emb_model=emb, demo=demo)
+    train_set = Dataset('./processed_data/2-splits/pandora_train_val.csv', my_train.emb_model, my_train.traits,  my_train.demo)   
+    test_set = Dataset('./processed_data/2-splits/pandora_test.csv', my_train.emb_model, my_train.traits, my_train.demo)    
+    # my_train.test_df = test_set.ORIGINAL
+    logging.info(50*"*")
+    epochs = 20
+    lr = 0.001
+    batch_size = 16
+    test_outputs, selected_features = {'mlp':{}}, {}
+    #Final Evaluation
+    for target_col in my_train.traits:
+        X, y, selected_features[target_col] = my_train.prepare_dataset(train_set.X, train_set.contextual_emb, train_set.Y[[target_col]], features=[])
+        train_dataset = TensorDataset(torch.tensor(X, dtype=torch.float32), torch.tensor(y, dtype=torch.float32))
+        train_loader =  DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+        # model = MLP(input_size=X.shape[1], hidden_size=128, output_size=1, dropout_rate=0.5)
+        model = BiLSTMClassifier(input_dim=X.shape[1], hidden_dim=128, output_dim=1, num_layers=2, bidirectional=True, do_attention=True, dropout_rate=0.5)
+        logging.info(f"{model}")
+        criterion = torch.nn.BCEWithLogitsLoss()  
+        optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+        for epoch in range(epochs):
+            train_acc, train_loss = _train_one_epoch(model, train_loader, criterion, optimizer, max_grad_norm=1.0)
+            if epoch % 4 == 0:
+                logging.info(f'Epoch: [{epoch + 1}/{epochs}], Train Loss: {train_loss:.4f}, Acc:{train_acc:.4f} ')
+        
+        X_test, y_test, _ = my_train.prepare_dataset(test_set.X, test_set.contextual_emb, test_set.Y[[target_col]], [])
+        y_pred, y_prob = predict(model, X_test)
+        test_outputs['mlp'][target_col] = (y_test, y_pred, y_prob)
+        logging.info(f'Test Acc: {accuracy_score(y_test, y_pred):.2f}')
+    my_train.display_metrics(test_outputs, initial='final-test')
+    logging.info(f'{selected_features}')
     
 if __name__ == "__main__":
     try:
         emb = sys.argv[1]
         models = sys.argv[2]
         kFold = False #sys.argv[3]
-        demo = None
+        demo = 100
         print(emb, models, kFold, demo)
         emb_models = {'1':'roberta-base', '2':'bert-base-uncased', '3':'vinai/bertweet-base', '4':'xlnet-base-cased'}
         emb = emb_models[emb] if emb in emb_models.keys() else None
@@ -317,8 +328,9 @@ if __name__ == "__main__":
             os.makedirs(f'{ckpt}/calibration/')
         logging.basicConfig(filename=f'{ckpt}/log_{timestamp}.log', level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
        
-        if kFold: kfold_train(emb, models, demo)
-        else: train(emb, models, demo, kFold=kFold)
+        final_test(emb, models, demo)
+        # if kFold: kfold_train(emb, models, demo)
+        # else: train(emb, models, demo, kFold=kFold)
 
     except:
         traceback.print_exc()
