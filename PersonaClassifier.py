@@ -8,7 +8,7 @@ from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_sc
 from sklearn.preprocessing import StandardScaler
 from torch.utils.data import DataLoader, TensorDataset
 from utils.DataProcessor import FeatureSelection, PreProcessor
-from utils.Visualization import generate_cm, generate_auroc, display_auroc, display_calibration, calculate_threshold
+from utils.Visualization import generate_cm, generate_auroc, display_auroc, display_calibration, calculate_threshold, generate_cal_result
 from utils.Models import MLP, MLPWrapper, BiLSTMClassifier, IdentityEstimator
 import xgboost as xgb
 from sklearn.svm import SVC
@@ -22,16 +22,18 @@ global timestamp
 global ckpt 
 global logging
 
-hyperparameters = {
-    'kFold' : False,
-    'hidden_dim' : 128,
-    'dropout_rate' : 0.3,
-    'batch_size': 16,
-    'epochs': 16,
-    'learning_rate': 0.001,
-    'random_state': 42,
-    'max_grad_norm': 1
-}
+class ModelCreator:
+    def __init__(self, X_shape, kFold, hyperparameters):
+        bilstm = BiLSTMClassifier(input_dim=X_shape, hidden_dim=hyperparameters['hidden_dim'], output_dim=1, num_layers=2, bidirectional=True, do_attention=True, dropout_rate=hyperparameters["dropout_rate"])
+        mlp = MLP(input_size=X_shape, hidden_size=hyperparameters['hidden_dim'], output_size=1, dropout_rate=hyperparameters["dropout_rate"])
+        self.estimators = {
+            "svm" : SVC(kernel='linear'),
+            "lr" : LogisticRegression(solver='lbfgs', max_iter=1000),
+            "rf" : RandomForestClassifier(n_estimators=100, random_state=42),
+            'xgb': xgb.XGBClassifier(n_estimators=100, learning_rate=0.1, max_depth=6, random_state=42),
+            'bilstm': MLPWrapper(model=bilstm, kFold=kFold, epochs=hyperparameters['epochs'], batch_size=hyperparameters['batch_size'], lr=hyperparameters['learning_rate']),
+            'mlp': MLPWrapper(model=mlp, kFold=kFold, epochs=hyperparameters['epochs'], batch_size=hyperparameters['batch_size'], lr=hyperparameters['learning_rate'])
+        }
 
 class Dataset:
     def __init__(self, filepath, emb_model, targets, demo):
@@ -48,19 +50,18 @@ class Dataset:
         logging.info(f'X Shape: {self.X.shape}, Y Shape: {self.Y.shape},  Contextual Emb Shape: {self.contextual_emb.shape if emb_model else []}')
 
 class My_training:
-    def __init__(self, model_list=None, emb_model=None, demo=True,traits=None, ):
+    def __init__(self, model_list=None, emb_model=None, demo=True, traits=None):
         self.models = model_list if model_list else ['svm', 'lr', 'rf', 'xgb', 'bilstm', 'mlp']
         self.emb_model = emb_model
         self.traits = traits if traits else ['cOPN', 'cCON', 'cEXT', 'cAGR', 'cNEU'] 
         self.demo = demo
-        self.all_outputs ={}
         self.test_outputs ={}
         self.cal_outputs ={}
-        self.test_df = pd.DataFrame()
+        self.estimators = {}
         for model in model_list:
-            self.all_outputs[model] = {}
             self.test_outputs[model] = {}
             self.cal_outputs[model] = {}
+        self.test_df = pd.DataFrame()
 
     def select_features(self, X, y, k):
         return FeatureSelection.filter_selection(X, y, k) #TODO experiment with other feature selection
@@ -81,66 +82,27 @@ class My_training:
         logging.info(f'Data Preparation Completed.')
         return X, y, features
 
-    def init_models(self, X_shape, kFold):
+    def init_models(self, X_shape, kFold, hyperparameters):
+        model_creator = ModelCreator(X_shape, kFold, hyperparameters)
         for model in self.models:
-            if model =='svm':
-                self.svm_model = SVC(kernel='linear')
-            elif model == 'lr':
-                self.lr_model = LogisticRegression(solver='lbfgs', max_iter=1000)
-            elif model == 'rf':
-                self.rf_model = RandomForestClassifier(n_estimators=100, random_state=42)
-            elif model == 'xgb':
-                self.xgb_model = xgb.XGBClassifier(n_estimators=100, learning_rate=0.1, max_depth=6, random_state=42)
-            elif model == 'bilstm':  
-                self.bilstm_Wrapper = MLPWrapper(model=BiLSTMClassifier(input_dim=X_shape, hidden_dim=128, output_dim=1, num_layers=2, bidirectional=True, do_attention=True, dropout_rate=0.5), kFold=kFold )
-            elif model == 'mlp':  
-                self.mlpWrapper = MLPWrapper(model=MLP(input_size=X_shape, hidden_size=128, output_size=1, dropout_rate=0.5), kFold=kFold)
+            self.estimators[model] = model_creator.estimators[model]
         logging.info(f'Model Initiated.')
     
     def fit_models(self, X, y, target_col, save_ckpt=False):
         logging.info(f'Fitting and Validating Models...')
         for model in self.models:
-            X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.1, shuffle=True, random_state=42)
-            if model =='svm':
-                self.svm_model.fit(X_train, y_train)
-                pred, probs = self.svm_model.predict(X_val), self.svm_model.decision_function(X_val)[:, 1]
-            elif model == 'lr':
-                self.lr_model.fit(X_train, y_train)
-                pred, probs = self.lr_model.predict(X_val), self.lr_model.predict_proba(X_val)[:, 1]
-            elif model == 'rf':
-                self.rf_model.fit(X_train, y_train)
-                pred, probs = self.rf_model.predict(X_val), self.rf_model.predict_proba(X_val)[:, 1]
-            elif model == 'xgb': 
-                self.xgb_model.fit(X_train, y_train)
-                pred, probs = self.xgb_model.predict(X_val), self.xgb_model.predict_proba(X_val)[:, 1]
-                if save_ckpt: self.xgb_model.save_model(f"{ckpt}/{self.xgb_model.__class__.__name__}_{target_col}.json")
-            elif model == 'bilstm':   
-                val_acc, pred, probs, y_val = self.bilstm_Wrapper.fit(X, y)
-                if save_ckpt: torch.save(self.bilstm_model.state_dict(), f"{ckpt}/{self.bilstm_model.__class__.__name__}_{target_col}.pth")
-            elif model == 'mlp':  
-                val_acc, pred, probs, y_val = self.mlpWrapper.fit(X, y)
-                if save_ckpt: torch.save(self.mlpWrapper.model.state_dict(), f"{ckpt}/{self.mlpWrapper.model.__class__.__name__}_{target_col}.pth")
-            self.all_outputs[model][target_col] = (y_val, pred, probs)
-            logging.info(f'{model} Val Acc: {accuracy_score(y_val, pred):.2f}')
+            estimator = self.estimators[model]
+            estimator.fit(X, y)
+            if save_ckpt: estimator.save_model(f"{ckpt}/{estimator.__class__.__name__}_{target_col}.json")
         logging.info(f'Model Fitted.')
 
     def evaluate_models(self, X, y, target_col, calibrate=False):
         logging.info(f'Evaluating on Test Dataset.')
         for model in self.models:
-            if model =='svm':
-                pred, probs = self.svm_model.predict(X), self.svm_model.decision_function(X)[:, 1]
-            elif model == 'lr':
-                pred, probs = self.lr_model.predict(X), self.lr_model.predict_proba(X)[:, 1]
-            elif model == 'rf':
-                pred, probs = self.rf_model.predict(X), self.rf_model.predict_proba(X)[:, 1]
-            elif model == 'xgb': 
-                pred, probs = self.xgb_model.predict(X), self.xgb_model.predict_proba(X)[:, 1]
-            elif model == 'bilstm':   
-                pred, probs = self.bilstm_Wrapper.predict_both(X)
-            elif model == 'mlp':  
-                # y_true, _, y_probs = self.all_outputs[model][target_col]
-                # threshold = calculate_threshold(y_true, y_probs)
-                pred, probs = self.mlpWrapper.predict_both(X)
+            estimator = self.estimators[model]
+            pred = estimator.predict(X)
+            probs = estimator.predict_proba(X)[:, 1] #handle for svm decision_function
+            logging.info(f'{probs}')
             if calibrate: generate_cal_result(y, pred, probs, target_col, f'{ckpt}/calibration/uncal_{model}_{target_col}.png')
             self.test_outputs[model][target_col] = (y, pred, probs)
             self.test_df[f'{model}_{target_col}'] = pred
@@ -156,7 +118,8 @@ class My_training:
         calibrated.fit(y_prob_val, y)
         y_cal_pred, y_cal_prob = calibrated.predict(y_prob_test), calibrated.predict_proba(y_prob_test)[:, 1]
         generate_cal_result(y_test, y_cal_pred, y_cal_prob, target_col, f'{ckpt}/calibration/cal_{model}_{target_col}.png' )
-        self.cal_outputs[model][target_col] = (y_test, y_cal_pred, y_cal_prob)     
+        self.cal_outputs[model][target_col] = (y_test, y_cal_pred, y_cal_prob)    
+        logging.info(f'Calibration completed.')
 
     def display_metrics(self, all_outputs, initial=None, savefig=True):
         logging.info(f'Generating Metrics and Figures.')
@@ -174,16 +137,6 @@ class My_training:
             #     s = performance_df[performance_df['Classifier'] ==col]
             #     best_model_row = s.loc[s['Accuracy'].idxmax()]
             #     logging.info(f'For {best_model_row["Classifier"]}, {best_model_row["Model"]},  {best_model_row["Accuracy"]}')
-
-def generate_cal_result(y_true, y_pred, y_prob, target_col, filename):
-    clf_score = brier_score_loss(y_true, y_prob, pos_label=1)
-    logging.info(f"{filename}")
-    logging.info("\tBrier: %1.3f" % (clf_score))
-    logging.info("\tAccuracy: %1.3f" % accuracy_score(y_true, y_pred))
-    logging.info("\tPrecision: %1.3f" % precision_score(y_true, y_pred))
-    logging.info("\tRecall: %1.3f" % recall_score(y_true, y_pred))
-    logging.info("\tF1: %1.3f" % f1_score(y_true, y_pred))
-    display_calibration(y_true, y_prob, target_col, filename)
 
 def kfold_train(emb, models, demo):
     logging.info(f'K-Fold Training started: {emb} {models} {demo}')
@@ -240,13 +193,11 @@ def kfold_train(emb, models, demo):
     my_train.display_metrics(test_outputs, initial='test')
     logging.info(f'{selected_features}')
    
-def train(emb, models, demo, kFold):
+def train(emb, models, demo, kFold, hyperparameters):
     logging.info(f'Training started: emb:{emb} models:{models} demo:{demo} kFold:{kFold}')
     my_train = My_training(model_list=models, emb_model=emb, demo=demo)
     train_set = Dataset('./processed_data/2-splits/pandora_train_val.csv', my_train.emb_model, my_train.traits, my_train.demo)   
     test_set = Dataset('./processed_data/2-splits/pandora_test.csv', my_train.emb_model, my_train.traits, my_train.demo)    
-    # train_set = Dataset('./processed_data/2-splits/mypersonality_train_val.csv', my_train.emb_model, my_train.traits, my_train.demo)   
-    # test_set = Dataset('./processed_data/2-splits/mypersonality_test.csv', my_train.emb_model, my_train.traits, my_train.demo)    
     my_train.test_df  = test_set.ORIGINAL
 
     logging.info(50*"*")
@@ -257,18 +208,17 @@ def train(emb, models, demo, kFold):
         X, y, selected_features[target_col] = my_train.prepare_dataset(train_set.X, train_set.contextual_emb, train_set.Y[[target_col]])
 
         #train and validate model
-        my_train.init_models(X_shape=X.shape[1], kFold=kFold)
+        my_train.init_models(X_shape=X.shape[1], kFold=kFold, hyperparameters=hyperparameters)
         my_train.fit_models(X, y, target_col, save_ckpt=False)
 
         #test model
         X_test, y_test, _ = my_train.prepare_dataset(test_set.X, test_set.contextual_emb, test_set.Y[[target_col]], selected_features[target_col])
-        my_train.evaluate_models(X_test, y_test, target_col)
+        my_train.evaluate_models(X_test, y_test, target_col, calibrate=False)
 
         #calibrate model 
         # my_train.calibrate_models(X, y, X_test, y_test, target_col)
 
         logging.info(50*"-")
-    my_train.display_metrics(my_train.all_outputs,  initial='val')
     my_train.display_metrics(my_train.test_outputs, initial='test')
     # my_train.display_metrics(my_train.cal_outputs, initial='cal')
     # my_train.test_df.to_csv(f'{ckpt}/prediction_test.csv')
@@ -313,11 +263,11 @@ if __name__ == "__main__":
         emb = sys.argv[1]
         models = sys.argv[2]
         kFold = False #sys.argv[3]
-        demo = 100
+        demo = None
         print(emb, models, kFold, demo)
         emb_models = {'1':'roberta-base', '2':'bert-base-uncased', '3':'vinai/bertweet-base', '4':'xlnet-base-cased'}
         emb = emb_models[emb] if emb in emb_models.keys() else None
-        models = ['lr', 'rf', 'xgb', 'mlp', 'bilstm'] if models == 'all' else [ 'mlp']
+        models = ['lr', 'rf', 'xgb', 'mlp', 'bilstm'] if models == 'all' else ['mlp']
         print(emb, models, kFold, demo)
 
         timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
@@ -328,9 +278,16 @@ if __name__ == "__main__":
             os.makedirs(f'{ckpt}/calibration/')
         logging.basicConfig(filename=f'{ckpt}/log_{timestamp}.log', level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
        
-        final_test(emb, models, demo)
-        # if kFold: kfold_train(emb, models, demo)
-        # else: train(emb, models, demo, kFold=kFold)
+        hyperparameters = {
+            'hidden_dim' : 128,
+            'dropout_rate' : 0.3,
+            'batch_size': 16,
+            'epochs': 16,
+            'learning_rate': 0.001,
+        }
+        # final_test(emb, models, demo)
+        if kFold: kfold_train(emb, models, demo)
+        else: train(emb, models, demo, kFold=kFold, hyperparameters=hyperparameters)
 
     except:
         traceback.print_exc()

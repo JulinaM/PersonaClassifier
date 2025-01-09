@@ -73,7 +73,7 @@ class BiLSTMClassifier(nn.Module):
 # print(output.shape)  # Expected output: (batch_size, output_dim)
 
 class MLPWrapper(BaseEstimator, ClassifierMixin):
-    def __init__(self, model, kFold=5, epochs=32, batch_size=16, lr=0.001, device=None):
+    def __init__(self, model, kFold, epochs, batch_size, lr, device=None):
         self.model = model
         # self.optimizer_class = optimizer_class
         # self.criterion = criterion
@@ -98,11 +98,8 @@ class MLPWrapper(BaseEstimator, ClassifierMixin):
     
     def predict_proba(self, X, threshold=0.5):
         _, probas = predict(self.model, X, threshold)
-        return probas
-
-    def predict_both(self, X, threshold=0.5):
-        return predict(self.model, X, threshold)
-
+        return np.concatenate((1 - probas, probas), axis=1)
+        
 # from skorch import NeuralNetClassifier
 # import torch.nn as nn
 # import torch

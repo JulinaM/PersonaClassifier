@@ -98,6 +98,16 @@ def generate_cm(a_output, filepath=None):
     return results
 
 
+def generate_cal_result(y_true, y_pred, y_prob, target_col, filename):
+    clf_score = brier_score_loss(y_true, y_prob, pos_label=1)
+    logging.info(f"{filename}")
+    logging.info("\tBrier: %1.3f" % (clf_score))
+    logging.info("\tAccuracy: %1.3f" % accuracy_score(y_true, y_pred))
+    logging.info("\tPrecision: %1.3f" % precision_score(y_true, y_pred))
+    logging.info("\tRecall: %1.3f" % recall_score(y_true, y_pred))
+    logging.info("\tF1: %1.3f" % f1_score(y_true, y_pred))
+    display_calibration(y_true, y_prob, target_col, filename)
+    
 #TODO
 def explain_SHAP(self, savefig=True):
     import shap
