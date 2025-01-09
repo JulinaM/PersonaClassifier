@@ -239,11 +239,13 @@ def final_eval(emb, models, demo, kFold, hyperparameters):
     # my_train.test_df = test_set.ORIGINAL
     logging.info(50*"*")
     selected_features = {}
+    epochs = {'cOPN': 9, 'cCON': 9,'cEXT': 9, 'cAGR':9, 'cNEU':9} 
     for target_col in my_train.traits:
         logging.info(f'{10*"-"} {target_col} {10*"-"}')
         # Scale and Select features
         X, y, selected_features[target_col] = my_train.prepare_dataset(train_set.X, train_set.contextual_emb, train_set.Y[[target_col]], [])
         #train 
+        hyperparameters['epochs'] = 9
         my_train.init_models(X_shape=X.shape[1], kFold=kFold, hyperparameters=hyperparameters)
         my_train.fit(X, y, target_col, save_ckpt=False)
         #test 
@@ -258,12 +260,12 @@ if __name__ == "__main__":
         emb = sys.argv[1]
         models = sys.argv[2]
         kFold = False #sys.argv[3]
-        demo = 100
+        demo = None
         eval = False #sys.argv[3]
         print(emb, models, kFold, demo)
         emb_models = {'1':'roberta-base', '2':'bert-base-uncased', '3':'vinai/bertweet-base', '4':'xlnet-base-cased'}
         emb = emb_models[emb] if emb in emb_models.keys() else None
-        models = ['lr', 'rf', 'xgb', 'mlp', 'bilstm'] if models == 'all' else ['mlp']
+        models = ['lr', 'rf', 'xgb', 'mlp', 'bilstm'] if models == 'all' else ['bilstm']
         print(emb, models, kFold, demo)
 
         timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')

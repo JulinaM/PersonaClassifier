@@ -83,6 +83,8 @@ class MLPWrapper(BaseEstimator, ClassifierMixin):
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         self.model.to(self.device)
         self.kFold = kFold
+        self.X_val = None
+        self.y_val = None
     
     def set_val_data(self, X_val, y_val):
         self.X_val = X_val
