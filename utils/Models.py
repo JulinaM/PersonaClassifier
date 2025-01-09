@@ -83,20 +83,20 @@ class MLPWrapper(BaseEstimator, ClassifierMixin):
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         self.model.to(self.device)
         self.kFold = kFold
-        self.onlyTrain = False
     
-    def set_only_train(self):
-        self.onlyTrain = True
+    def set_val_data(self, X_val, y_val):
+        self.X_val = X_val
+        self.y_val = y_val
     
     def fit(self, X, y):
         self.classes_ = np.unique(y)  # Unique class labels
         if self.kFold:
             return train_val_kfold(self.model, X, y, self.kFold, self.batch_size, self.epochs, self.lr)
         else:   
-            if self.onlyTrain: 
-                return train(self.model, X, y, self.batch_size, self.epochs, self.lr)
+            if self.X_val is not None:
+                return train_val(self.model, X, y, self.X_val, self.y_val, self.batch_size, self.epochs, self.lr)
             else:
-                return train_val(self.model, X, y, self.batch_size, self.epochs, self.lr)
+                return train(self.model, X, y, self.batch_size, self.epochs, self.lr)
 
     def predict(self, X, threshold=0.5):
         pred, _ = predict(self.model, X, threshold)

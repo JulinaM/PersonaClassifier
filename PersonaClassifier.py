@@ -55,10 +55,12 @@ class My_training:
         self.traits = traits if traits else ['cOPN', 'cCON', 'cEXT', 'cAGR', 'cNEU'] 
         self.demo = demo
         self.test_outputs ={}
+        self.val_outputs = {}
         self.cal_outputs ={}
         self.estimators = {}
         for model in model_list:
             self.test_outputs[model] = {}
+            self.val_outputs[model]= {}
             self.cal_outputs[model] = {}
         self.test_df = pd.DataFrame()
         
@@ -75,17 +77,27 @@ class My_training:
         logging.info(f'Data Preparation Completed.')
         return X, y, features
 
-    def init_models(self, X_shape, kFold, hyperparameters, only_train=False):
+    def init_models(self, X_shape, kFold, hyperparameters):
         model_creator = ModelCreator(X_shape, kFold, hyperparameters)
         for model in self.models:
             self.estimators[model] = model_creator.estimators[model]
-            if only_train:
-                if model in ['mlp', 'bilstm']:
-                    self.estimators[model].set_only_train()
         logging.info(f'Model Initiated.')
     
-    def fit_models(self, X, y, target_col, save_ckpt=False):
+    def fit_and_validate(self, X, y, target_col, save_ckpt=False):
         logging.info(f'Fitting and Validating Models...')
+        X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.1, shuffle=True, random_state=42)
+        for model in self.models:
+            estimator = self.estimators[model]
+            if model in ['mlp', 'bilstm']:
+                self.estimators[model].set_val_data(X_val, y_val)
+            estimator.fit(X_train, y_train)
+            y_pred, y_prob = estimator.predict(X_val), estimator.predict_proba(X_val)[:,1]
+            self.val_outputs[model][target_col] = (y_val, y_pred, y_prob)
+            logging.info(f'{model} VAl Acc: {accuracy_score(y_val, y_pred):.2f}')
+        logging.info(f'Model Fitted and Validated.')
+
+    def fit(self, X, y, target_col, save_ckpt=False):
+        logging.info(f'Fitting Models...')
         for model in self.models:
             estimator = self.estimators[model]
             estimator.fit(X, y)
@@ -189,7 +201,7 @@ def kfold_train(emb, models, demo):
     logging.info(f'{selected_features}')
    
 def train(emb, models, demo, kFold, hyperparameters):
-    logging.info(f'Training started: emb:{emb} models:{models} demo:{demo} kFold:{kFold}')
+    logging.info(f'Training started: emb:{emb} models:{models} demo:{demo} kFold:{kFold}, hyperparameters: {hyperparameters}')
     my_train = My_training(model_list=models, emb_model=emb, demo=demo)
     train_set = Dataset('./processed_data/2-splits/pandora_train_val.csv', my_train.emb_model, my_train.traits, my_train.demo)   
     test_set = Dataset('./processed_data/2-splits/pandora_test.csv', my_train.emb_model, my_train.traits, my_train.demo)    
@@ -199,11 +211,11 @@ def train(emb, models, demo, kFold, hyperparameters):
     for target_col in my_train.traits:
         logging.info(f'{10*"-"} {target_col} {10*"-"}')
         # Scale and Select features
-        X, y, selected_features[target_col] = my_train.prepare_dataset(train_set.X, train_set.contextual_emb, train_set.Y[[target_col]])
+        X, y, selected_features[target_col] = my_train.prepare_dataset(train_set.X, train_set.contextual_emb, train_set.Y[[target_col]], [])
 
         #train and validate model
         my_train.init_models(X_shape=X.shape[1], kFold=kFold, hyperparameters=hyperparameters)
-        my_train.fit_models(X, y, target_col, save_ckpt=False)
+        my_train.fit_and_validate(X, y, target_col, save_ckpt=False)
 
         #test model
         X_test, y_test, _ = my_train.prepare_dataset(test_set.X, test_set.contextual_emb, test_set.Y[[target_col]], selected_features[target_col])
@@ -213,13 +225,14 @@ def train(emb, models, demo, kFold, hyperparameters):
         # my_train.calibrate_models(X, y, X_test, y_test, target_col)
 
         logging.info(50*"-")
+    my_train.display_metrics(my_train.val_outputs, initial='val')
     my_train.display_metrics(my_train.test_outputs, initial='test')
     # my_train.display_metrics(my_train.cal_outputs, initial='cal')
     # pd.DataFrame(selected_features).to_csv(f"{ckpt}/selected_features.csv")
     logging.info(f'selected_features :{selected_features}')
 
-def final_test(emb, models, demo, kFold, hyperparameters):
-    logging.info(f'Training started: emb:{emb} models:{models} demo:{demo} kFold:{kFold}')
+def final_eval(emb, models, demo, kFold, hyperparameters):
+    logging.info(f'Training started: emb:{emb} models:{models} demo:{demo} kFold:{kFold}, hyperparameters: {hyperparameters}')
     my_train = My_training(model_list=models, emb_model=emb, demo=demo)
     train_set = Dataset('./processed_data/2-splits/pandora_train_val.csv', my_train.emb_model, my_train.traits,  my_train.demo)   
     test_set = Dataset('./processed_data/2-splits/pandora_test.csv', my_train.emb_model, my_train.traits, my_train.demo)    
@@ -231,8 +244,8 @@ def final_test(emb, models, demo, kFold, hyperparameters):
         # Scale and Select features
         X, y, selected_features[target_col] = my_train.prepare_dataset(train_set.X, train_set.contextual_emb, train_set.Y[[target_col]], [])
         #train 
-        my_train.init_models(X_shape=X.shape[1], kFold=kFold, hyperparameters=hyperparameters, only_train=True)
-        my_train.fit_models(X, y, target_col, save_ckpt=False)
+        my_train.init_models(X_shape=X.shape[1], kFold=kFold, hyperparameters=hyperparameters)
+        my_train.fit(X, y, target_col, save_ckpt=False)
         #test 
         X_test, y_test, _ = my_train.prepare_dataset(test_set.X, test_set.contextual_emb, test_set.Y[[target_col]], selected_features[target_col])
         my_train.evaluate_models(X_test, y_test, target_col, calibrate=False)
@@ -245,8 +258,8 @@ if __name__ == "__main__":
         emb = sys.argv[1]
         models = sys.argv[2]
         kFold = False #sys.argv[3]
-        demo = None
-        eval = sys.argv[3]
+        demo = 100
+        eval = False #sys.argv[3]
         print(emb, models, kFold, demo)
         emb_models = {'1':'roberta-base', '2':'bert-base-uncased', '3':'vinai/bertweet-base', '4':'xlnet-base-cased'}
         emb = emb_models[emb] if emb in emb_models.keys() else None
@@ -269,7 +282,7 @@ if __name__ == "__main__":
             'epochs': 16,
             'learning_rate': 0.001,
         }
-        if eval: final_test(emb, models, demo, kFold, hyperparameters=hyperparameters) 
+        if eval: final_eval(emb, models, demo, kFold, hyperparameters=hyperparameters) 
         else:
             if kFold: kfold_train(emb, models, demo)
             else: train(emb, models, demo, kFold=kFold, hyperparameters=hyperparameters)
