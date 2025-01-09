@@ -18,7 +18,6 @@ from sklearn.model_selection import train_test_split, KFold, StratifiedKFold
 from sklearn.calibration import CalibratedClassifierCV
 from utils.Training import _train_one_epoch, _validate_one_epoch, predict, EarlyStopper
 from torch.utils.data import DataLoader, TensorDataset, Subset
-global timestamp
 global ckpt 
 global logging
 
@@ -62,12 +61,6 @@ class My_training:
             self.test_outputs[model] = {}
             self.cal_outputs[model] = {}
         self.test_df = pd.DataFrame()
-
-    def select_features(self, X, y, k):
-        return FeatureSelection.filter_selection(X, y, k) #TODO experiment with other feature selection
-        # return FeatureSelection.variance_selection(X)
-        # return FeatureSelection.get_optimal_features(X, y)
-        # return X.columns
         
     def prepare_dataset(self, stat_df, emb_df, y_df, features=None):
         # logging.info(f'{stat_df.shape}, {y_df.shape}, {emb_df.shape}')
@@ -82,10 +75,13 @@ class My_training:
         logging.info(f'Data Preparation Completed.')
         return X, y, features
 
-    def init_models(self, X_shape, kFold, hyperparameters):
+    def init_models(self, X_shape, kFold, hyperparameters, only_train=False):
         model_creator = ModelCreator(X_shape, kFold, hyperparameters)
         for model in self.models:
             self.estimators[model] = model_creator.estimators[model]
+            if only_train:
+                if model in ['mlp', 'bilstm']:
+                    self.estimators[model].set_only_train()
         logging.info(f'Model Initiated.')
     
     def fit_models(self, X, y, target_col, save_ckpt=False):
@@ -102,10 +98,9 @@ class My_training:
             estimator = self.estimators[model]
             pred = estimator.predict(X)
             probs = estimator.predict_proba(X)[:, 1] #handle for svm decision_function
-            logging.info(f'{probs}')
             if calibrate: generate_cal_result(y, pred, probs, target_col, f'{ckpt}/calibration/uncal_{model}_{target_col}.png')
             self.test_outputs[model][target_col] = (y, pred, probs)
-            self.test_df[f'{model}_{target_col}'] = pred
+            # self.test_df[f'{model}_{target_col}'] = pred
             logging.info(f'{model} Test Acc: {accuracy_score(y, pred):.2f}')
         logging.info(f'Evaluation completed.')
 
@@ -198,7 +193,6 @@ def train(emb, models, demo, kFold, hyperparameters):
     my_train = My_training(model_list=models, emb_model=emb, demo=demo)
     train_set = Dataset('./processed_data/2-splits/pandora_train_val.csv', my_train.emb_model, my_train.traits, my_train.demo)   
     test_set = Dataset('./processed_data/2-splits/pandora_test.csv', my_train.emb_model, my_train.traits, my_train.demo)    
-    my_train.test_df  = test_set.ORIGINAL
 
     logging.info(50*"*")
     selected_features = {}
@@ -221,41 +215,29 @@ def train(emb, models, demo, kFold, hyperparameters):
         logging.info(50*"-")
     my_train.display_metrics(my_train.test_outputs, initial='test')
     # my_train.display_metrics(my_train.cal_outputs, initial='cal')
-    # my_train.test_df.to_csv(f'{ckpt}/prediction_test.csv')
     # pd.DataFrame(selected_features).to_csv(f"{ckpt}/selected_features.csv")
     logging.info(f'selected_features :{selected_features}')
 
-def final_test(emb, models, demo):
+def final_test(emb, models, demo, kFold, hyperparameters):
     logging.info(f'Training started: emb:{emb} models:{models} demo:{demo} kFold:{kFold}')
     my_train = My_training(model_list=models, emb_model=emb, demo=demo)
     train_set = Dataset('./processed_data/2-splits/pandora_train_val.csv', my_train.emb_model, my_train.traits,  my_train.demo)   
     test_set = Dataset('./processed_data/2-splits/pandora_test.csv', my_train.emb_model, my_train.traits, my_train.demo)    
     # my_train.test_df = test_set.ORIGINAL
     logging.info(50*"*")
-    epochs = 20
-    lr = 0.001
-    batch_size = 16
-    test_outputs, selected_features = {'mlp':{}}, {}
-    #Final Evaluation
+    selected_features = {}
     for target_col in my_train.traits:
-        X, y, selected_features[target_col] = my_train.prepare_dataset(train_set.X, train_set.contextual_emb, train_set.Y[[target_col]], features=[])
-        train_dataset = TensorDataset(torch.tensor(X, dtype=torch.float32), torch.tensor(y, dtype=torch.float32))
-        train_loader =  DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-        # model = MLP(input_size=X.shape[1], hidden_size=128, output_size=1, dropout_rate=0.5)
-        model = BiLSTMClassifier(input_dim=X.shape[1], hidden_dim=128, output_dim=1, num_layers=2, bidirectional=True, do_attention=True, dropout_rate=0.5)
-        logging.info(f"{model}")
-        criterion = torch.nn.BCEWithLogitsLoss()  
-        optimizer = torch.optim.Adam(model.parameters(), lr=lr)
-        for epoch in range(epochs):
-            train_acc, train_loss = _train_one_epoch(model, train_loader, criterion, optimizer, max_grad_norm=1.0)
-            if epoch % 4 == 0:
-                logging.info(f'Epoch: [{epoch + 1}/{epochs}], Train Loss: {train_loss:.4f}, Acc:{train_acc:.4f} ')
-        
-        X_test, y_test, _ = my_train.prepare_dataset(test_set.X, test_set.contextual_emb, test_set.Y[[target_col]], [])
-        y_pred, y_prob = predict(model, X_test)
-        test_outputs['mlp'][target_col] = (y_test, y_pred, y_prob)
-        logging.info(f'Test Acc: {accuracy_score(y_test, y_pred):.2f}')
-    my_train.display_metrics(test_outputs, initial='final-test')
+        logging.info(f'{10*"-"} {target_col} {10*"-"}')
+        # Scale and Select features
+        X, y, selected_features[target_col] = my_train.prepare_dataset(train_set.X, train_set.contextual_emb, train_set.Y[[target_col]], [])
+        #train 
+        my_train.init_models(X_shape=X.shape[1], kFold=kFold, hyperparameters=hyperparameters, only_train=True)
+        my_train.fit_models(X, y, target_col, save_ckpt=False)
+        #test 
+        X_test, y_test, _ = my_train.prepare_dataset(test_set.X, test_set.contextual_emb, test_set.Y[[target_col]], selected_features[target_col])
+        my_train.evaluate_models(X_test, y_test, target_col, calibrate=False)
+    my_train.display_metrics(my_train.test_outputs, initial='final-test')
+    # my_train.test_df.to_csv(f'{ckpt}/prediction_test.csv')
     logging.info(f'{selected_features}')
     
 if __name__ == "__main__":
@@ -264,6 +246,7 @@ if __name__ == "__main__":
         models = sys.argv[2]
         kFold = False #sys.argv[3]
         demo = None
+        eval = sys.argv[3]
         print(emb, models, kFold, demo)
         emb_models = {'1':'roberta-base', '2':'bert-base-uncased', '3':'vinai/bertweet-base', '4':'xlnet-base-cased'}
         emb = emb_models[emb] if emb in emb_models.keys() else None
@@ -273,6 +256,7 @@ if __name__ == "__main__":
         timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
         folder = f"{emb.split('-')[0]}-{timestamp}" if emb else f"{timestamp}"
         if demo: folder = f"{folder}_demo"
+        if eval: folder = f"{folder}_final_eval"
         ckpt = f"checkpoint/{folder}"
         if not os.path.exists(ckpt):
             os.makedirs(f'{ckpt}/calibration/')
@@ -285,9 +269,10 @@ if __name__ == "__main__":
             'epochs': 16,
             'learning_rate': 0.001,
         }
-        # final_test(emb, models, demo)
-        if kFold: kfold_train(emb, models, demo)
-        else: train(emb, models, demo, kFold=kFold, hyperparameters=hyperparameters)
+        if eval: final_test(emb, models, demo, kFold, hyperparameters=hyperparameters) 
+        else:
+            if kFold: kfold_train(emb, models, demo)
+            else: train(emb, models, demo, kFold=kFold, hyperparameters=hyperparameters)
 
     except:
         traceback.print_exc()

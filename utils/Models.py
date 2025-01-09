@@ -2,7 +2,7 @@ import torch.nn as nn
 import torch
 import numpy as np
 from sklearn.base import BaseEstimator, ClassifierMixin
-from utils.Training import train_val_kfold, train_val, predict
+from utils.Training import train_val_kfold, train_val, predict, train
 import logging
 
 class MLP(nn.Module):
@@ -83,13 +83,20 @@ class MLPWrapper(BaseEstimator, ClassifierMixin):
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         self.model.to(self.device)
         self.kFold = kFold
+        self.onlyTrain = False
+    
+    def set_only_train(self):
+        self.onlyTrain = True
     
     def fit(self, X, y):
         self.classes_ = np.unique(y)  # Unique class labels
         if self.kFold:
             return train_val_kfold(self.model, X, y, self.kFold, self.batch_size, self.epochs, self.lr)
         else:   
-            return train_val(self.model, X, y, self.batch_size, self.epochs, self.lr)
+            if self.onlyTrain: 
+                return train(self.model, X, y, self.batch_size, self.epochs, self.lr)
+            else:
+                return train_val(self.model, X, y, self.batch_size, self.epochs, self.lr)
 
     def predict(self, X, threshold=0.5):
         pred, _ = predict(self.model, X, threshold)

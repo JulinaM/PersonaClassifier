@@ -72,6 +72,16 @@ def predict(model, X, threshold=0.5):
         pred = (probs > threshold).float() 
     return pred.numpy(), probs.numpy()
 
+def train(model, X, y, batch_size, epochs, lr, max_grad_norm=1.0):
+    logging.info(f'{model.__class__.__name__}; lr={lr}, batch_size={batch_size}')
+    train_dataset = TensorDataset(torch.tensor(X, dtype=torch.float32), torch.tensor(y, dtype=torch.float32))
+    train_loader =  DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+
+    criterion = nn.BCEWithLogitsLoss()  
+    optimizer = optim.Adam(model.parameters(), lr=lr)
+    for epoch in range(epochs):
+        train_accuracy, train_loss = _train_one_epoch(model, train_loader, criterion, optimizer, max_grad_norm)
+
 def train_val(model, X, y, batch_size, epochs, lr, max_grad_norm=1.0):
     logging.info(f'{model.__class__.__name__}; lr={lr}, batch_size={batch_size}')
     X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.1, shuffle=True, random_state=42)
