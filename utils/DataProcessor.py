@@ -136,7 +136,7 @@ class PreProcessor:
     def process_embeddings(df, model_name, batch_size=8):
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-        logging.info(f'Generating Embedding from {model_name}')
+        logging.info(f'Generating Embedding from {model_name} using {device}')
         tokenizer = AutoTokenizer.from_pretrained(model_name)
         model = AutoModel.from_pretrained(model_name)
         model.to(device)
@@ -219,21 +219,23 @@ if __name__ == "__main__":
         # logging.info(f"Reading RAW files: {main_file} and {liwc_file}")
         # df = PreProcessor.read_data(main_file, liwc_file, False)
 
-        main_file = "data/mypersonality.csv"
-        liwc_file = "data/LIWC_mypersonality_oct_2.csv"
-        logging.info(f"Reading RAW files: {main_file} and {liwc_file}")
-        df = PreProcessor.read_data(main_file, liwc_file, True)
+        # main_file = "data/mypersonality.csv"
+        # liwc_file = "data/LIWC_mypersonality_oct_2.csv"
+        # logging.info(f"Reading RAW files: {main_file} and {liwc_file}")
+        # df = PreProcessor.read_data(main_file, liwc_file, True)
 
-        # df = pd.concat([df, df1], ignore_index=True)
-        df = PreProcessor.process_NRC_emotion(df)
-        df = PreProcessor.process_NRC_VAD(df)
-        df = PreProcessor.process_VADER_sentiment(df)
-        df =  PreProcessor.clean_up_text(df)
+        # # df = pd.concat([df, df1], ignore_index=True)
+        # df = PreProcessor.process_NRC_emotion(df)
+        # df = PreProcessor.process_NRC_VAD(df)
+        # df = PreProcessor.process_VADER_sentiment(df)
+
+        df = pd.read_csv("data/pandora_to_big5_v2.csv")
+        # df =  PreProcessor.clean_up_text(df)
         # df_train, df_val, df_test = PreProcessor.split_dataset(df, 0.1)
         df_train, df_test = train_test_split(df, test_size=0.1, shuffle=True, random_state=42)
-        df_train.to_csv('processed_data/2-splits/mypersonality_train_val.csv')
+        df_train.to_csv('processed_data/2-splits/pandora_train_val_v2.csv')
         # df_val.to_csv('data/processed_data/3-splits/pandora_val.csv')
-        df_test.to_csv('processed_data/2-splits/mypersonality_test.csv')
+        df_test.to_csv('processed_data/2-splits/pandora_test_v2.csv')
         logging.info(f"All files saved in process_data dir.")
     except:
         traceback.print_exc()

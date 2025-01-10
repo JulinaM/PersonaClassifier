@@ -74,6 +74,7 @@ class BiLSTMClassifier(nn.Module):
 
 class MLPWrapper(BaseEstimator, ClassifierMixin):
     def __init__(self, model, kFold, epochs, batch_size, lr, device=None):
+        self.classes_ = [0, 1]  #  np.unique(y) Unique class labels
         self.model = model
         # self.optimizer_class = optimizer_class
         # self.criterion = criterion
@@ -91,22 +92,20 @@ class MLPWrapper(BaseEstimator, ClassifierMixin):
         self.y_val = y_val
     
     def fit(self, X, y):
-        self.classes_ = np.unique(y)  # Unique class labels
         if self.kFold:
             return train_val_kfold(self.model, X, y, self.kFold, self.batch_size, self.epochs, self.lr)
         else:   
             if self.X_val is not None:
-                return train_val(self.model, X, y, self.X_val, self.y_val, self.batch_size, self.epochs, self.lr)
+                return train_val(self.model, X, y, self.X_val, self.y_val, self.device, self.batch_size, self.epochs, self.lr)
             else:
-                return train(self.model, X, y, self.batch_size, self.epochs, self.lr)
+                return train(self.model, X, y, self.device, self.batch_size, self.epochs, self.lr)
 
     def predict(self, X, threshold=0.5):
-        pred, _ = predict(self.model, X, threshold)
+        pred, _ = predict(self.model, X, self.device, threshold)
         return pred
-        # return self.classes_[pred]  
     
     def predict_proba(self, X, threshold=0.5):
-        _, probas = predict(self.model, X, threshold)
+        _, probas = predict(self.model, X, self.device, threshold)
         return np.concatenate((1 - probas, probas), axis=1)
         
 # from skorch import NeuralNetClassifier
