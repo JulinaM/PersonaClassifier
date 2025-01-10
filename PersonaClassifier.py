@@ -42,8 +42,9 @@ class Dataset:
         SENTIMENT = ['sent_score']
         df = pd.read_csv(filepath) 
         if demo: df = df.sample(demo)
+        logging.info(f'{df.shape}')
         self.contextual_emb = PreProcessor.process_embeddings(df, emb_model) if emb_model else []
-        self.X = df.drop(['Unnamed: 0', 'STATUS'] + targets, axis=1)
+        self.X = df.drop(['Unnamed: 0', 'STATUS', '#AUTHID'] + targets, axis=1)
         self.Y = df[targets]
         self.ORIGINAL = df[['STATUS'] + targets]
         logging.info(f'X Shape: {self.X.shape}, Y Shape: {self.Y.shape},  Contextual Emb Shape: {self.contextual_emb.shape if emb_model else []}')
@@ -66,12 +67,13 @@ class My_training:
         
     def prepare_dataset(self, stat_df, emb_df, y_df, features=None):
         # logging.info(f'{stat_df.shape}, {y_df.shape}, {emb_df.shape}')
-        scaler = StandardScaler() #TODO experiment with other tranformation like log
-        X_df = pd.DataFrame(scaler.fit_transform(stat_df), columns=stat_df.columns)
-        if features is None: features = FeatureSelection.filter_selection(X_df, y_df, 5)
-        X = np.concatenate([X_df[features], emb_df], axis=1)
+        # scaler = StandardScaler() #TODO experiment with other tranformation like log
+        # X_df = pd.DataFrame(scaler.fit_transform(stat_df), columns=stat_df.columns)
+        # if features is None: features = FeatureSelection.filter_selection(X_df, y_df, 5)
+        # X = np.concatenate([X_df[features], emb_df], axis=1)
+        X = np.array(emb_df)
         y = np.array(y_df).ravel()
-        logging.info(f'statistical embedding: {X_df[features].shape}')
+        # logging.info(f'statistical embedding: {X_df[features].shape}')
         logging.info(f'contextual embedding: {emb_df.shape} ')
         logging.info(f'Final shape X and y: {X.shape} and {y.shape}')
         logging.info(f'Data Preparation Completed.')
@@ -83,9 +85,8 @@ class My_training:
             self.estimators[model] = model_creator.estimators[model]
         logging.info(f'Model Initiated.')
     
-    def fit_and_validate(self, X, y, target_col, save_ckpt=False):
+    def fit_and_validate(self, X_train, y_train, X_val, y_val, target_col, save_ckpt=False):
         logging.info(f'Fitting and Validating Models...')
-        X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.1, shuffle=True, random_state=42)
         for model in self.models:
             estimator = self.estimators[model]
             if model in ['mlp', 'bilstm']:
@@ -93,7 +94,7 @@ class My_training:
             estimator.fit(X_train, y_train)
             y_pred, y_prob = estimator.predict(X_val), estimator.predict_proba(X_val)[:,1]
             self.val_outputs[model][target_col] = (y_val, y_pred, y_prob)
-            logging.info(f'{model} VAl Acc: {accuracy_score(y_val, y_pred):.2f}')
+            logging.info(f'{model} Val Acc: {accuracy_score(y_val, y_pred):.2f}')
         logging.info(f'Model Fitted and Validated.')
 
     def fit(self, X, y, target_col, save_ckpt=False):
@@ -203,8 +204,8 @@ def kfold_train(emb, models, demo):
 def train(emb, models, demo, kFold, hyperparameters):
     logging.info(f'Training started: emb:{emb} models:{models} demo:{demo} kFold:{kFold}, hyperparameters: {hyperparameters}')
     my_train = My_training(model_list=models, emb_model=emb, demo=demo)
-    train_set = Dataset('./processed_data/2-splits/pandora_train_val.csv', my_train.emb_model, my_train.traits, my_train.demo)   
-    test_set = Dataset('./processed_data/2-splits/pandora_test.csv', my_train.emb_model, my_train.traits, my_train.demo)    
+    train_set = Dataset('./processed_data/2-splits/pandora_train_val_v2.csv', my_train.emb_model, my_train.traits, my_train.demo)   
+    test_set = Dataset('./processed_data/2-splits/pandora_test_v2.csv', my_train.emb_model, my_train.traits, my_train.demo)    
 
     logging.info(50*"*")
     selected_features = {}
@@ -212,10 +213,11 @@ def train(emb, models, demo, kFold, hyperparameters):
         logging.info(f'{10*"-"} {target_col} {10*"-"}')
         # Scale and Select features
         X, y, selected_features[target_col] = my_train.prepare_dataset(train_set.X, train_set.contextual_emb, train_set.Y[[target_col]], [])
+        X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.1, shuffle=True, random_state=42)
 
         #train and validate model
         my_train.init_models(X_shape=X.shape[1], kFold=kFold, hyperparameters=hyperparameters)
-        my_train.fit_and_validate(X, y, target_col, save_ckpt=False)
+        my_train.fit_and_validate(X_train, y_train, X_val, y_val, target_col, save_ckpt=False)
 
         #test model
         X_test, y_test, _ = my_train.prepare_dataset(test_set.X, test_set.contextual_emb, test_set.Y[[target_col]], selected_features[target_col])
@@ -234,18 +236,18 @@ def train(emb, models, demo, kFold, hyperparameters):
 def final_eval(emb, models, demo, kFold, hyperparameters):
     logging.info(f'Training started: emb:{emb} models:{models} demo:{demo} kFold:{kFold}, hyperparameters: {hyperparameters}')
     my_train = My_training(model_list=models, emb_model=emb, demo=demo)
-    train_set = Dataset('./processed_data/2-splits/pandora_train_val.csv', my_train.emb_model, my_train.traits,  my_train.demo)   
-    test_set = Dataset('./processed_data/2-splits/pandora_test.csv', my_train.emb_model, my_train.traits, my_train.demo)    
+    train_set = Dataset('./processed_data/2-splits/pandora_train_val_v2.csv', my_train.emb_model, my_train.traits,  my_train.demo)   
+    test_set = Dataset('./processed_data/2-splits/pandora_test_v2.csv', my_train.emb_model, my_train.traits, my_train.demo)    
     # my_train.test_df = test_set.ORIGINAL
     logging.info(50*"*")
     selected_features = {}
-    epochs = {'cOPN': 9, 'cCON': 9,'cEXT': 9, 'cAGR':9, 'cNEU':9} 
+    epochs = {'cOPN': 9, 'cCON': 8,'cEXT': 7, 'cAGR':7, 'cNEU':8} 
     for target_col in my_train.traits:
         logging.info(f'{10*"-"} {target_col} {10*"-"}')
         # Scale and Select features
         X, y, selected_features[target_col] = my_train.prepare_dataset(train_set.X, train_set.contextual_emb, train_set.Y[[target_col]], [])
         #train 
-        hyperparameters['epochs'] = 9
+        hyperparameters['epochs'] = epochs[target_col]
         my_train.init_models(X_shape=X.shape[1], kFold=kFold, hyperparameters=hyperparameters)
         my_train.fit(X, y, target_col, save_ckpt=False)
         #test 
@@ -265,7 +267,7 @@ if __name__ == "__main__":
         print(emb, models, kFold, demo)
         emb_models = {'1':'roberta-base', '2':'bert-base-uncased', '3':'vinai/bertweet-base', '4':'xlnet-base-cased'}
         emb = emb_models[emb] if emb in emb_models.keys() else None
-        models = ['lr', 'rf', 'xgb', 'mlp', 'bilstm'] if models == 'all' else ['bilstm']
+        models = ['lr', 'rf', 'xgb', 'mlp', 'bilstm'] if models == 'all' else ['mlp', 'bilstm']
         print(emb, models, kFold, demo)
 
         timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')

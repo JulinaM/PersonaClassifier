@@ -26,10 +26,11 @@ class EarlyStopper:
                 return True
         return False
 
-def _train_one_epoch(model, train_loader, criterion, optimizer, max_grad_norm, threshold=0.5):
+def _train_one_epoch(model, train_loader, device, criterion, optimizer, max_grad_norm, threshold=0.5):
     model.train()
     correct, train_loss = 0, 0.0
     for input, target in train_loader:
+        input, target = input.to(device), target.to(device)
         optimizer.zero_grad()  
         output = model(input)
         loss = criterion(output, target.unsqueeze(1))
@@ -44,12 +45,13 @@ def _train_one_epoch(model, train_loader, criterion, optimizer, max_grad_norm, t
     train_accuracy =  correct / len(train_loader.dataset)
     return train_accuracy, train_loss
 
-def _validate_one_epoch(model, val_loader, criterion, threshold=0.5):
+def _validate_one_epoch(model, val_loader, device, criterion, threshold=0.5):
     correct, val_loss = 0,  0.0
     val_preds, val_probas, val_targets = [], [], []
     model.eval()  
     with torch.no_grad():  
         for input, target in val_loader:
+            input, target = input.to(device), target.to(device)
             output = model(input)
             if criterion: val_loss += criterion(output, target.unsqueeze(1)).item()  
             probs = torch.sigmoid(output) 
@@ -62,27 +64,29 @@ def _validate_one_epoch(model, val_loader, criterion, threshold=0.5):
     val_accuracy = correct / len(val_loader.dataset)
     return val_accuracy, val_loss, val_preds, val_probas, val_targets
 
-def predict(model, X, threshold=0.5):
-    logging.info(f'{model.__class__.__name__}; threshold={threshold}')
+def predict(model, X, device, threshold=0.5):
+    # logging.info(f'{model.__class__.__name__}; threshold={threshold}')
     X_tensor = torch.tensor(X, dtype=torch.float32)
+    X_tensor = X_tensor.to(device)
     model.eval()  
     with torch.no_grad():  
         output = model(X_tensor)
         probs = torch.sigmoid(output) 
         pred = (probs > threshold).float() 
-    return pred.numpy(), probs.numpy()
+    return pred.cpu().numpy(), probs.cpu().numpy()
 
-def train(model, X, y, batch_size, epochs, lr, max_grad_norm=1.0):
+def train(model, X, y, device, batch_size, epochs, lr, max_grad_norm=1.0):
     logging.info(f'{model.__class__.__name__}; lr={lr}, batch_size={batch_size}')
     train_dataset = TensorDataset(torch.tensor(X, dtype=torch.float32), torch.tensor(y, dtype=torch.float32))
     train_loader =  DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
 
     criterion = nn.BCEWithLogitsLoss()  
+    criterion = criterion.to(device)
     optimizer = optim.Adam(model.parameters(), lr=lr)
     for epoch in range(epochs):
-        train_accuracy, train_loss = _train_one_epoch(model, train_loader, criterion, optimizer, max_grad_norm)
+        train_accuracy, train_loss = _train_one_epoch(model, train_loader, device, criterion, optimizer, max_grad_norm)
 
-def train_val(model, X_train, y_train, X_val, y_val, batch_size, epochs, lr, max_grad_norm=1.0):
+def train_val(model, X_train, y_train, X_val, y_val, device, batch_size, epochs, lr, max_grad_norm=1.0):
     logging.info(f'{model.__class__.__name__}; lr={lr}, batch_size={batch_size}')
     train_dataset = TensorDataset(torch.tensor(X_train, dtype=torch.float32), torch.tensor(y_train, dtype=torch.float32))
     val_dataset = TensorDataset(torch.tensor(X_val, dtype=torch.float32), torch.tensor(y_val, dtype=torch.float32))
@@ -90,23 +94,25 @@ def train_val(model, X_train, y_train, X_val, y_val, batch_size, epochs, lr, max
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
     
     criterion = nn.BCEWithLogitsLoss()  # criterion = nn.BCELoss()  
+    criterion = criterion.to(device)
     optimizer = optim.Adam(model.parameters(), lr=lr)
     train_accuracies, val_accuracies = [], []
     early_stopper = EarlyStopper(patience=3, min_delta=0.001)
     for epoch in range(epochs):
-        train_accuracy, train_loss = _train_one_epoch(model, train_loader, criterion, optimizer, max_grad_norm)
+        train_accuracy, train_loss = _train_one_epoch(model, train_loader, device, criterion, optimizer, max_grad_norm)
         train_accuracies.append(train_accuracy)
 
-        val_accuracy, val_loss, val_preds, val_probas, val_targets = _validate_one_epoch(model, val_loader, criterion)
+        val_accuracy, val_loss, val_preds, val_probas, val_targets = _validate_one_epoch(model, val_loader, device, criterion)
         val_accuracies.append(val_accuracy)
         if epoch % 4 == 0:
             logging.info(f'Epoch: [{epoch + 1}/{epochs}], Train:: Loss: {train_loss:.4f}, Acc:{train_accuracy:.4f}, and  Val:: Loss: {val_loss:.4f}, Acc: {val_accuracy:.4f} ')
-        if early_stopper.early_stop(val_loss):             
+        if early_stopper.early_stop(val_loss):          
+            logging.info(f'early stopping at {epoch} epoch.')   
             break
     # _display_acc_curve(train_accuracies, val_accuracies, epoch, ckpt)
     return val_accuracy, torch.cat(val_preds), torch.cat(val_probas), torch.cat(val_targets)
 
-def train_val_kfold(model, X, y, k_folds, batch_size, epochs, lr, max_grad_norm=1.0):
+def train_val_kfold(model, X, y, k_folds, device, batch_size, epochs, lr, max_grad_norm=1.0):
     logging.info(f'{model.__class__.__name__}; lr={lr}, batch_size={batch_size}, k_folds={k_folds}')
     dataset = TensorDataset(torch.tensor(X, dtype=torch.float32), torch.tensor(y, dtype=torch.float32))
     targets = np.array([target for _, target in dataset]) 
@@ -114,7 +120,8 @@ def train_val_kfold(model, X, y, k_folds, batch_size, epochs, lr, max_grad_norm=
     kf = StratifiedKFold(n_splits=k_folds, shuffle=True, random_state=42)
     fold_results = {}
     early_stopper = EarlyStopper(patience=3, min_delta=0.001)
-    criterion = nn.BCEWithLogitsLoss()  
+    criterion = nn.BCEWithLogitsLoss()     
+    criterion = criterion.to(device)
     optimizer = optim.Adam(model.parameters(), lr=lr)
 
     for fold, (train_idx, val_idx) in enumerate(kf.split(dataset, targets)):
@@ -124,9 +131,9 @@ def train_val_kfold(model, X, y, k_folds, batch_size, epochs, lr, max_grad_norm=
         val_loader = DataLoader(val_subset, batch_size=batch_size, shuffle=False)
 
         for epoch in range(epochs):
-            train_accuracy, train_loss = _train_one_epoch(model, train_loader, criterion, optimizer, max_grad_norm)
+            train_accuracy, train_loss = _train_one_epoch(model, train_loader, device, criterion, optimizer, max_grad_norm)
 
-        val_accuracy, val_loss, val_preds, val_probas, val_targets = _validate_one_epoch(model, val_loader,  criterion)
+        val_accuracy, val_loss, val_preds, val_probas, val_targets = _validate_one_epoch(model, val_loader,  device, criterion)
         fold_results[fold] = {'train_loss': train_loss, 'train_acc': train_accuracy, 'val_loss': val_loss, 'val_accuracy': val_accuracy}
         logging.info(f'Fold {fold+1}/{k_folds} - Train:: Loss: {train_loss:.4f}, Acc: {train_accuracy:.4f} and Val:: Loss: {val_loss:.4f}, Acc: {val_accuracy:.4f}')
         if early_stopper.early_stop(val_loss):   
