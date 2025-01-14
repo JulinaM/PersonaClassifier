@@ -107,18 +107,6 @@ class MLPWrapper(BaseEstimator, ClassifierMixin):
     def predict_proba(self, X, threshold=0.5):
         _, probas = predict(self.model, X, self.device, threshold)
         return np.concatenate((1 - probas, probas), axis=1)
-        
-# from skorch import NeuralNetClassifier
-# import torch.nn as nn
-# import torch
-# mlp = MLP(input_size=X.shape[1], hidden_size=128, output_size=1, dropout_rate=0.5)
-# skorchMLP = NeuralNetClassifier(
-#     mlp,
-#     criterion=nn.BCEWithLogitsLoss,
-#     optimizer=torch.optim.Adam,
-#     lr=0.001,
-#     max_epochs=32,
-# )
 
 class IdentityEstimator(BaseEstimator, ClassifierMixin):
     '''

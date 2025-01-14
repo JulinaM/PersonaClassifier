@@ -41,16 +41,16 @@ class Dataset:
         NRC_emotions = ['anger', 'anticipation', 'disgust', 'fear', 'joy', 'negative', 'positive', 'sadness', 'surprise', 'trust', 'sent_score']
         SENTIMENT = ['sent_score']
         df = pd.read_csv(filepath) 
-        if demo: df = df.sample(demo)
+        if demo: df = df.sample(demo, random_state=42)
         logging.info(f'{df.shape}')
         self.contextual_emb = PreProcessor.process_embeddings(df, emb_model) if emb_model else []
-        self.X = df.drop(['Unnamed: 0', 'STATUS', '#AUTHID'] + targets, axis=1)
+        self.X = df.drop(['Unnamed: 0', 'STATUS', '#AUTHID'] + targets, axis=1) #remove #AUTHID for V1
         self.Y = df[targets]
         self.ORIGINAL = df[['STATUS'] + targets]
         logging.info(f'X Shape: {self.X.shape}, Y Shape: {self.Y.shape},  Contextual Emb Shape: {self.contextual_emb.shape if emb_model else []}')
 
 class My_training:
-    def __init__(self, model_list=None, emb_model=None, demo=True, traits=None):
+    def __init__(self, model_list=None, emb_model=None, demo=False, traits=None):
         self.models = model_list if model_list else ['svm', 'lr', 'rf', 'xgb', 'bilstm', 'mlp']
         self.emb_model = emb_model
         self.traits = traits if traits else ['cOPN', 'cCON', 'cEXT', 'cAGR', 'cNEU'] 
@@ -66,7 +66,7 @@ class My_training:
         self.test_df = pd.DataFrame()
         
     def prepare_dataset(self, stat_df, emb_df, y_df, features=None):
-        # logging.info(f'{stat_df.shape}, {y_df.shape}, {emb_df.shape}')
+        logging.info(f'{stat_df.shape}, {y_df.shape}, {emb_df.shape}') #TODO run with linguistic property
         # scaler = StandardScaler() #TODO experiment with other tranformation like log
         # X_df = pd.DataFrame(scaler.fit_transform(stat_df), columns=stat_df.columns)
         # if features is None: features = FeatureSelection.filter_selection(X_df, y_df, 5)
@@ -212,8 +212,10 @@ def train(emb, models, demo, kFold, hyperparameters):
     for target_col in my_train.traits:
         logging.info(f'{10*"-"} {target_col} {10*"-"}')
         # Scale and Select features
-        X, y, selected_features[target_col] = my_train.prepare_dataset(train_set.X, train_set.contextual_emb, train_set.Y[[target_col]], [])
+        X, y, selected_features[target_col] = my_train.prepare_dataset(train_set.X, train_set.contextual_emb, train_set.Y[[target_col]])
         X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.1, shuffle=True, random_state=42)
+        # X_train, X_test, y_train, y_test = train_test_split(X, y, stratify=y, random_state=0)
+
 
         #train and validate model
         my_train.init_models(X_shape=X.shape[1], kFold=kFold, hyperparameters=hyperparameters)
@@ -281,10 +283,10 @@ if __name__ == "__main__":
        
         hyperparameters = {
             'hidden_dim' : 128,
-            'dropout_rate' : 0.3,
             'batch_size': 16,
             'epochs': 16,
-            'learning_rate': 0.001,
+            'learning_rate': 0.0001,
+            # 'dropout_rate': 0.5
         }
         if eval: final_eval(emb, models, demo, kFold, hyperparameters=hyperparameters) 
         else:
