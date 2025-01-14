@@ -76,7 +76,7 @@ def predict(model, X, device, threshold=0.5):
     return pred.cpu().numpy(), probs.cpu().numpy()
 
 def train(model, X, y, device, batch_size, epochs, lr, max_grad_norm=1.0):
-    logging.info(f'{model.__class__.__name__}; lr={lr}, batch_size={batch_size}')
+    logging.info(f'{model.__class__.__name__}; lr={lr}, batch_size={batch_size}, dropout={model.dropout}')
     train_dataset = TensorDataset(torch.tensor(X, dtype=torch.float32), torch.tensor(y, dtype=torch.float32))
     train_loader =  DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
 
@@ -87,7 +87,7 @@ def train(model, X, y, device, batch_size, epochs, lr, max_grad_norm=1.0):
         train_accuracy, train_loss = _train_one_epoch(model, train_loader, device, criterion, optimizer, max_grad_norm)
 
 def train_val(model, X_train, y_train, X_val, y_val, device, batch_size, epochs, lr, max_grad_norm=1.0):
-    logging.info(f'{model.__class__.__name__}; lr={lr}, batch_size={batch_size}')
+    logging.info(f'{model.__class__.__name__}; lr={lr}, batch_size={batch_size}, dropout={model.dropout}')
     train_dataset = TensorDataset(torch.tensor(X_train, dtype=torch.float32), torch.tensor(y_train, dtype=torch.float32))
     val_dataset = TensorDataset(torch.tensor(X_val, dtype=torch.float32), torch.tensor(y_val, dtype=torch.float32))
     train_loader =  DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
