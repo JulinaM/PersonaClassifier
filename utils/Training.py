@@ -85,7 +85,9 @@ def train(model, X, y, device, batch_size, epochs, lr, max_grad_norm=1.0):
     optimizer = optim.Adam(model.parameters(), lr=lr)
     for epoch in range(epochs):
         train_accuracy, train_loss = _train_one_epoch(model, train_loader, device, criterion, optimizer, max_grad_norm)
-
+        if epoch % 2 == 0:
+            logging.info(f'Epoch: [{epoch + 1}/{epochs}], Train:: Loss: {train_loss:.4f}, Acc:{train_accuracy:.4f}')
+    
 def train_val(model, X_train, y_train, X_val, y_val, device, batch_size, epochs, lr, max_grad_norm=1.0):
     logging.info(f'{model.__class__.__name__}; lr={lr}, batch_size={batch_size}, dropout={model.dropout}')
     train_dataset = TensorDataset(torch.tensor(X_train, dtype=torch.float32), torch.tensor(y_train, dtype=torch.float32))
