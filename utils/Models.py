@@ -70,7 +70,7 @@ class BiLSTMClassifier(nn.Module):
 # model = BiLSTMClassifier(input_dim=768, hidden_dim=128, output_dim=5, num_layers=2)
 # input_data = torch.randn(2, 5, 768)  # Example input (batch_size=32, seq_len=50, input_dim=768)
 # output= model(input_data)
-# print(output.shape)  # Expected output: (batch_size, output_dim)
+# print(output.shape)  # Expected output: (batch_size, outsave_modelsave_modelput_dim)
 
 class MLPWrapper(BaseEstimator, ClassifierMixin):
     def __init__(self, model, kFold, epochs, batch_size, lr, device=None):
@@ -86,7 +86,8 @@ class MLPWrapper(BaseEstimator, ClassifierMixin):
         self.kFold = kFold
         self.X_val = None
         self.y_val = None
-    
+        logging.info(f'Wrapper initiated for {self.model} with devive {self.device}')
+
     def set_val_data(self, X_val, y_val):
         self.X_val = X_val
         self.y_val = y_val
@@ -107,6 +108,10 @@ class MLPWrapper(BaseEstimator, ClassifierMixin):
     def predict_proba(self, X, threshold=0.5):
         _, probas = predict(self.model, X, self.device, threshold)
         return np.concatenate((1 - probas, probas), axis=1)
+
+    def save_model(self, PATH):
+        torch.save(self.model.state_dict(), PATH.replace(self.__class__.__name__, self.model.__class__.__name__))
+
 
 class IdentityEstimator(BaseEstimator, ClassifierMixin):
     '''

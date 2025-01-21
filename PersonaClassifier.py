@@ -23,6 +23,7 @@ global logging
 
 class ModelCreator:
     def __init__(self, X_shape, kFold, hyperparameters):
+        logging.info(f'Model Creator initiated. hyperparameters: {hyperparameters}.')
         mlp = MLP(input_size=X_shape, hidden_size=hyperparameters['hidden_dim'], output_size=1, dropout_rate=hyperparameters["dropout_rate1"])
         bilstm = BiLSTMClassifier(input_dim=X_shape, hidden_dim=hyperparameters['hidden_dim'], output_dim=1, num_layers=2, bidirectional=True, do_attention=True, dropout_rate=hyperparameters["dropout_rate2"])
         self.estimators = {
@@ -36,7 +37,7 @@ class ModelCreator:
 
 class Dataset:
     def __init__(self, filepath, emb_model, targets, demo):
-        logging.info(f'Processing  {filepath} Dataset.')
+        logging.info(f'Processing {filepath} Dataset.')
         NRC_VAD = ['Valence', 'Arousal', 'Dominance']
         NRC_emotions = ['anger', 'anticipation', 'disgust', 'fear', 'joy', 'negative', 'positive', 'sadness', 'surprise', 'trust', 'sent_score']
         SENTIMENT = ['sent_score']
@@ -51,6 +52,7 @@ class Dataset:
 
 class My_training:
     def __init__(self, model_list=None, emb_model=None, demo=False, traits=None):
+        logging.info(f'Training initiated: emb:{emb_model} models:{model_list} demo:{demo}')
         self.models = model_list if model_list else ['svm', 'lr', 'rf', 'xgb', 'bilstm', 'mlp']
         self.emb_model = emb_model
         self.traits = traits if traits else ['cOPN', 'cCON', 'cEXT', 'cAGR', 'cNEU'] 
@@ -143,7 +145,7 @@ class My_training:
             #     best_model_row = s.loc[s['Accuracy'].idxmax()]
             #     logging.info(f'For {best_model_row["Classifier"]}, {best_model_row["Model"]},  {best_model_row["Accuracy"]}')
 
-def kfold_train(emb, models, demo):
+def kfold_train(emb, models, demo, filepath):
     logging.info(f'K-Fold Training started: {emb} {models} {demo}')
     my_train = My_training(model_list=models, emb_model=emb, demo=demo)
     dataset = Dataset('./processed_data/2-splits/pandora_train_val.csv', my_train.emb_model, my_train.traits, my_train.demo)    
@@ -198,10 +200,9 @@ def kfold_train(emb, models, demo):
     my_train.display_metrics(test_outputs, initial='test')
     logging.info(f'{selected_features}')
    
-def train(emb, models, demo, kFold, hyperparameters):
-    logging.info(f'Training started: emb:{emb} models:{models} demo:{demo} kFold:{kFold}, hyperparameters: {hyperparameters}')
+def train(emb, models, demo, kFold, hyperparameters, filepath):
     my_train = My_training(model_list=models, emb_model=emb, demo=demo)
-    dataset = Dataset('./data/pandora_to_big5_v3.csv', my_train.emb_model, my_train.traits,  my_train.demo)   
+    dataset = Dataset(filepath, my_train.emb_model, my_train.traits,  my_train.demo)   
 
     logging.info(50*"*")
     selected_features = {}
@@ -209,8 +210,11 @@ def train(emb, models, demo, kFold, hyperparameters):
         logging.info(f'{10*"-"} {target_col} {10*"-"}')
         # Scale and prepare X and y
         X, y = my_train.prepare_dataset(dataset.X, dataset.contextual_emb, dataset.Y[[target_col]])
+
+        #Split data into 3 parts
         X_train, X_test, y_train, y_test = train_test_split(X, y, stratify=y, test_size=0.2, shuffle=True, random_state=42)
         X_test, X_val, y_test, y_val = train_test_split(X_test, y_test, stratify=y_test, test_size=0.5, shuffle=True, random_state=42)
+        logging.info(f'Train: {X_train.shape}, Val: {X_val.shape}, Test: {X_test.shape}')
 
         # #Select Features
         # selected_features[target_col] = FeatureSelection.filter_selection(X_train, y_train, 5)
@@ -233,18 +237,21 @@ def train(emb, models, demo, kFold, hyperparameters):
     # pd.DataFrame(selected_features).to_csv(f"{ckpt}/selected_features.csv")
     logging.info(f'selected_features :{selected_features}')
 
-def final_eval(emb, models, demo, kFold, hyperparameters):
-    logging.info(f'Training started: emb:{emb} models:{models} demo:{demo} kFold:{kFold}, hyperparameters: {hyperparameters}')
+def final_eval(emb, models, demo, kFold, hyperparameters, filepath):
     my_train = My_training(model_list=models, emb_model=emb, demo=demo)
-    dataset = Dataset('./data/pandora_to_big5_v3.csv', my_train.emb_model, my_train.traits,  my_train.demo)   
+    dataset = Dataset(filepath, my_train.emb_model, my_train.traits,  my_train.demo)   
     logging.info(50*"*")
     selected_features = {}
-    # epochs = {'cOPN': 19, 'cCON': 18,'cEXT': 17, 'cAGR':17, 'cNEU':18} 
+    epochs = {'cOPN': 21, 'cCON': 17,'cEXT': 21, 'cAGR':19, 'cNEU':17} 
+    # my_train.test_df = test_dataset.ORIGINAL
+
     for target_col in my_train.traits:
         logging.info(f'{10*"-"} {target_col} {10*"-"}')
         X, y = my_train.prepare_dataset(dataset.X, dataset.contextual_emb, dataset.Y[[target_col]])
-        X_train, X_test, y_train, y_test = train_test_split(X, y, stratify=y, random_state=0)
-        # hyperparameters['epochs'] = epochs[target_col]
+        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.1, stratify=y, random_state=0)
+        logging.info(f'Train: {X_train.shape}, Test: {X_test.shape}')
+
+        hyperparameters['epochs'] = epochs[target_col]
         my_train.init_models(X_shape=X_train.shape[1], kFold=kFold, hyperparameters=hyperparameters)
         my_train.fit(X_train, y_train, target_col, save_ckpt=True)
         my_train.evaluate_models(X_test, y_test, target_col, calibrate=True)
@@ -255,20 +262,23 @@ def final_eval(emb, models, demo, kFold, hyperparameters):
 if __name__ == "__main__":
     try:
         emb = sys.argv[1]
-        models = sys.argv[2]
+        model_type = sys.argv[2]
         kFold = False #sys.argv[3]
-        demo = None
-        eval = False #sys.argv[3]
-        print(emb, models, kFold, demo)
+        demo = 100
+        eval = False 
+        version = 'v4'
+        filepath = f'./data/pandora_to_big5_{version}.csv'   
+
+        print(emb, model_type, kFold, demo, eval)
         emb_models = {'1':'roberta-base', '2':'bert-base-uncased', '3':'vinai/bertweet-base', '4':'xlnet-base-cased'}
         emb = emb_models[emb] if emb in emb_models.keys() else None
-        models = ['lr', 'rf', 'xgb', 'mlp', 'bilstm'] if models == 'all' else ['bilstm', 'mlp']
-        print(emb, models, kFold, demo)
+        models = ['lr', 'rf', 'xgb', 'mlp', 'bilstm'] if model_type == 'all' else ['bilstm', 'mlp']
+        print(emb, models, kFold, demo, eval)
 
         timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
-        folder = f"v3_{emb.split('-')[0]}-{timestamp}" if emb else f"{timestamp}"
-        if demo: folder = f"{folder}_demo"
+        folder = f"{version}_{model_type}_{emb.split('-')[0]}-{timestamp}" if emb else f"{timestamp}"
         if eval: folder = f"{folder}_final_eval"
+        if demo: folder = f"{folder}_demo"
         ckpt = f"checkpoint/{folder}"
         if not os.path.exists(ckpt):
             os.makedirs(f'{ckpt}/calibration/')
@@ -282,10 +292,10 @@ if __name__ == "__main__":
             'dropout_rate1': 0.3,
             'dropout_rate2': 0.3
         }
-        if eval: final_eval(emb, models, demo, kFold, hyperparameters=hyperparameters) 
+        if eval: final_eval(emb, models, demo, kFold, hyperparameters=hyperparameters, filepath=filepath) 
         else:
-            if kFold: kfold_train(emb, models, demo)
-            else: train(emb, models, demo, kFold=kFold, hyperparameters=hyperparameters)
+            if kFold: kfold_train(emb, models, demo, filepath =filepath)
+            else: train(emb, models, demo, kFold=kFold, hyperparameters=hyperparameters, filepath=filepath)
 
     except:
         traceback.print_exc()
