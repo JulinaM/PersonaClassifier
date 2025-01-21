@@ -92,7 +92,7 @@ def train_val(model, X_train, y_train, X_val, y_val, device, batch_size, epochs,
     logging.info(f'{model.__class__.__name__}; lr={lr}, batch_size={batch_size}, dropout={model.dropout}')
     train_dataset = TensorDataset(torch.tensor(X_train, dtype=torch.float32), torch.tensor(y_train, dtype=torch.float32))
     val_dataset = TensorDataset(torch.tensor(X_val, dtype=torch.float32), torch.tensor(y_val, dtype=torch.float32))
-    train_loader =  DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+    train_loader =  DataLoader(train_dataset, batch_size=batch_size, shuffle=True, drop_last=True)
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
     
     criterion = nn.BCEWithLogitsLoss()  # criterion = nn.BCELoss()  
