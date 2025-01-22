@@ -75,29 +75,23 @@ def predict(model, X, device, threshold=0.5):
         pred = (probs > threshold).float() 
     return pred.cpu().numpy(), probs.cpu().numpy()
 
-def train(model, X, y, device, batch_size, epochs, lr, max_grad_norm=1.0):
-    logging.info(f'{model.__class__.__name__}; lr={lr}, batch_size={batch_size}, dropout={model.dropout}')
+def train(model, X, y, device, batch_size, epochs, optimizer, criterion, max_grad_norm=1.0):
+    logging.info(f'{model.__class__.__name__};  batch_size={batch_size}, dropout={model.dropout}')
     train_dataset = TensorDataset(torch.tensor(X, dtype=torch.float32), torch.tensor(y, dtype=torch.float32))
     train_loader =  DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
 
-    criterion = nn.BCEWithLogitsLoss()  
-    criterion = criterion.to(device)
-    optimizer = optim.Adam(model.parameters(), lr=lr)
     for epoch in range(epochs):
         train_accuracy, train_loss = _train_one_epoch(model, train_loader, device, criterion, optimizer, max_grad_norm)
         if epoch % 2 == 0:
             logging.info(f'Epoch: [{epoch + 1}/{epochs}], Train:: Loss: {train_loss:.4f}, Acc:{train_accuracy:.4f}')
     
-def train_val(model, X_train, y_train, X_val, y_val, device, batch_size, epochs, lr, max_grad_norm=1.0):
-    logging.info(f'{model.__class__.__name__}; lr={lr}, batch_size={batch_size}, dropout={model.dropout}')
+def train_val(model, X_train, y_train, X_val, y_val, device, batch_size, epochs, optimizer, criterion, max_grad_norm=1.0):
+    logging.info(f'{model.__class__.__name__};  batch_size={batch_size}, dropout={model.dropout}')
     train_dataset = TensorDataset(torch.tensor(X_train, dtype=torch.float32), torch.tensor(y_train, dtype=torch.float32))
     val_dataset = TensorDataset(torch.tensor(X_val, dtype=torch.float32), torch.tensor(y_val, dtype=torch.float32))
     train_loader =  DataLoader(train_dataset, batch_size=batch_size, shuffle=True, drop_last=True)
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
     
-    criterion = nn.BCEWithLogitsLoss()  # criterion = nn.BCELoss()  
-    criterion = criterion.to(device)
-    optimizer = optim.Adam(model.parameters(), lr=lr)
     train_accuracies, val_accuracies = [], []
     early_stopper = EarlyStopper(patience=3, min_delta=0.001)
     for epoch in range(epochs):
@@ -114,17 +108,14 @@ def train_val(model, X_train, y_train, X_val, y_val, device, batch_size, epochs,
     # _display_acc_curve(train_accuracies, val_accuracies, epoch, ckpt)
     return val_accuracy, torch.cat(val_preds), torch.cat(val_probas), torch.cat(val_targets)
 
-def train_val_kfold(model, X, y, k_folds, device, batch_size, epochs, lr, max_grad_norm=1.0):
-    logging.info(f'{model.__class__.__name__}; lr={lr}, batch_size={batch_size}, k_folds={k_folds}')
+def train_val_kfold(model, X, y, k_folds, device, batch_size, epochs, optimizer, criterion, max_grad_norm=1.0):
+    logging.info(f'{model.__class__.__name__};  batch_size={batch_size}, k_folds={k_folds}')
     dataset = TensorDataset(torch.tensor(X, dtype=torch.float32), torch.tensor(y, dtype=torch.float32))
     targets = np.array([target for _, target in dataset]) 
 
     kf = StratifiedKFold(n_splits=k_folds, shuffle=True, random_state=42)
     fold_results = {}
     early_stopper = EarlyStopper(patience=3, min_delta=0.001)
-    criterion = nn.BCEWithLogitsLoss()     
-    criterion = criterion.to(device)
-    optimizer = optim.Adam(model.parameters(), lr=lr)
 
     for fold, (train_idx, val_idx) in enumerate(kf.split(dataset, targets)):
         train_subset = Subset(dataset, train_idx)
