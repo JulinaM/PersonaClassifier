@@ -4,6 +4,7 @@ import numpy as np
 from sklearn.base import BaseEstimator, ClassifierMixin
 from utils.Training import train_val_kfold, train_val, predict, train
 import logging
+import torch.optim as optim
 
 class MLP(nn.Module):
     def __init__(self, input_size, hidden_size, output_size, dropout_rate=0.3):
@@ -72,21 +73,32 @@ class BiLSTMClassifier(nn.Module):
 # output= model(input_data)
 # print(output.shape)  # Expected output: (batch_size, outsave_modelsave_modelput_dim)
 
-class MLPWrapper(BaseEstimator, ClassifierMixin):
-    def __init__(self, model, kFold, epochs, batch_size, lr, device=None):
+class MyEstimator(BaseEstimator, ClassifierMixin):
+    def __init__(self, model_name, input_dim, hidden_dim, dropout_rate, epochs, lr, batch_size, kFold, device=None, **params):
         self.classes_ = [0, 1]  #  np.unique(y) Unique class labels
-        self.model = model
-        # self.optimizer_class = optimizer_class
-        # self.criterion = criterion
-        self.epochs = epochs
-        self.batch_size = batch_size
-        self.lr = lr
-        self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
-        self.model.to(self.device)
+        self.model_name=model_name
         self.kFold = kFold
+        self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+        self.input_dim = input_dim
+        self.hidden_dim = hidden_dim
+        self.dropout_rate = dropout_rate
+        self.epochs = epochs
+        self.lr = lr
+        self.batch_size = batch_size
+        for k,v in params.items():
+            print(f"{k} => {v}")
+            setattr(self, k, v)
+
+        if model_name =='mlp': 
+            self.model =  MLP(input_size=self.input_dim, hidden_size=self.hidden_dim, output_size=1, dropout_rate=self.dropout_rate)
+        else:
+            self.model =  BiLSTMClassifier(input_dim=self.input_dim, hidden_dim=self.hidden_dim, output_dim=1, num_layers=2, bidirectional=True, do_attention=True, dropout_rate=self.dropout_rate)
+        self.model.to(self.device)
+        self.criterion = nn.BCEWithLogitsLoss()     #nn.BCELoss()  
+        self.criterion = self.criterion.to(device)
+        self.optimizer = optim.Adam(self.model.parameters(), lr=self.lr)
         self.X_val = None
         self.y_val = None
-        logging.info(f'Wrapper initiated for {self.model} with devive {self.device}')
 
     def set_val_data(self, X_val, y_val):
         self.X_val = X_val
@@ -94,12 +106,12 @@ class MLPWrapper(BaseEstimator, ClassifierMixin):
     
     def fit(self, X, y):
         if self.kFold:
-            return train_val_kfold(self.model, X, y, self.kFold, self.batch_size, self.epochs, self.lr)
+            return train_val_kfold(self.model, X, y, self.kFold, self.batch_size, self.epochs,self.optimizer, self.criterion)
         else:   
             if self.X_val is not None:
-                return train_val(self.model, X, y, self.X_val, self.y_val, self.device, self.batch_size, self.epochs, self.lr)
+                return train_val(self.model, X, y, self.X_val, self.y_val, self.device, self.batch_size, self.epochs,  self.optimizer, self.criterion)
             else:
-                return train(self.model, X, y, self.device, self.batch_size, self.epochs, self.lr)
+                return train(self.model, X, y, self.device, self.batch_size, self.epochs, self.optimizer, self.criterion)
 
     def predict(self, X, threshold=0.5):
         pred, _ = predict(self.model, X, self.device, threshold)
@@ -111,7 +123,6 @@ class MLPWrapper(BaseEstimator, ClassifierMixin):
 
     def save_model(self, PATH):
         torch.save(self.model.state_dict(), PATH.replace(self.__class__.__name__, self.model.__class__.__name__))
-
 
 class IdentityEstimator(BaseEstimator, ClassifierMixin):
     '''
