@@ -38,17 +38,17 @@ class ModelCreator:
 class Dataset:
     def __init__(self, filepath, emb_model, targets, demo):
         logging.info(f'Processing {filepath} Dataset.')
-        NRC_VAD = ['Valence', 'Arousal', 'Dominance']
-        NRC_emotions = ['anger', 'anticipation', 'disgust', 'fear', 'joy', 'negative', 'positive', 'sadness', 'surprise', 'trust', 'sent_score']
-        SENTIMENT = ['sent_score']
         df = pd.read_csv(filepath) 
         if demo: df = df.sample(demo, random_state=42)
         logging.info(f'{df.shape}')
+        # df =  PreProcessor.clean_up_text(df)
+        df = df.loc[:, ~df.columns.str.contains('^Unnamed:')]
+        df = df.loc[:, ~df.columns.str.contains('^#AUTHID:')]
         self.contextual_emb = PreProcessor.process_embeddings(df, emb_model) if emb_model else []
-        self.X = df.drop(['Unnamed: 0', 'STATUS', '#AUTHID'] + targets, axis=1) #remove #AUTHID for V1
+        self.X = df.drop(['STATUS'] + targets, axis=1) #remove #AUTHID for V1
         self.Y = df[targets]
         self.ORIGINAL = df[['STATUS'] + targets]
-        logging.info(f'X Shape: {self.X.shape}, Y Shape: {self.Y.shape},  Contextual Emb Shape: {self.contextual_emb.shape if emb_model else []}')
+        logging.info(f'X Shape: {self.X.shape}, Y Shape: {self.Y.shape}, Contextual Emb (Z) Shape: {self.contextual_emb.shape if emb_model else []}')
 
 class My_training:
     def __init__(self, model_list=None, emb_model=None, traits=None):
@@ -67,11 +67,11 @@ class My_training:
         self.test_df = pd.DataFrame()
         
     def prepare_dataset(self, stat_df, emb_df, y_df):
-        logging.info(f'{stat_df.shape}, {y_df.shape}, {emb_df.shape}') #TODO run with linguistic property
-        # scaler = StandardScaler() #TODO experiment with other tranformation like log
-        # X_df = pd.DataFrame(scaler.fit_transform(stat_df), columns=stat_df.columns)
-        # X = np.concatenate([X_df, emb_df], axis=1)
-        X = np.array(emb_df)
+        logging.info(f'{stat_df.shape}, {emb_df.shape}, {y_df.shape}')
+        scaler = StandardScaler() 
+        X_df = pd.DataFrame(scaler.fit_transform(stat_df), columns=stat_df.columns)
+        X = np.concatenate([X_df, emb_df], axis=1)
+        X = np.array(X)
         y = np.array(y_df).ravel()
         logging.info(f'Final shape X and y: {X.shape} and {y.shape}')
         logging.info(f'Data Preparation Completed.')
@@ -207,20 +207,23 @@ def train(emb, models, demo, kFold, hyperparameters, filepath):
     selected_features = {}
     for target_col in my_train.traits:
         logging.info(f'{10*"-"} {target_col} {10*"-"}')
-        # Scale and prepare X and y
-        X, y = my_train.prepare_dataset(dataset.X, dataset.contextual_emb, dataset.Y[[target_col]])
-
         #Split data into 3 parts
-        X_train, X_test, y_train, y_test = train_test_split(X, y, stratify=y, test_size=0.2, shuffle=True, random_state=42)
-        X_test, X_val, y_test, y_val = train_test_split(X_test, y_test, stratify=y_test, test_size=0.5, shuffle=True, random_state=42)
+        X, Z, y = dataset.X, dataset.contextual_emb, dataset.Y[[target_col]]
+        X_train, X_test, Z_train, Z_test, y_train, y_test, = train_test_split(X, Z, y, stratify=y, test_size=0.2, shuffle=True, random_state=42)
+        X_test, X_val, Z_test, Z_val, y_test, y_val = train_test_split(X_test, Z_test, y_test,  stratify=y_test, test_size=0.5, shuffle=True, random_state=42)
         logging.info(f'Train: {X_train.shape}, Val: {X_val.shape}, Test: {X_test.shape}')
 
-        # #Select Features
-        # selected_features[target_col] = FeatureSelection.filter_selection(X_train, y_train, 5)
-        # X_train, X_val, X_test = X_train[selected_features[target_col]], X_val[selected_features[target_col]], X_test[selected_features[target_col]]
+        #Select Features
+        selected_features[target_col] = FeatureSelection.get_optimal_features(X_train, y_train)
+        X_train, X_val, X_test = X_train[selected_features[target_col]], X_val[selected_features[target_col]], X_test[selected_features[target_col]]
+
+        # Scale and prepare X and y
+        X_train, y_train = my_train.prepare_dataset(X_train, Z_train, y_train)
+        X_val, y_val = my_train.prepare_dataset(X_val, Z_val, y_val)
+        X_test, y_test = my_train.prepare_dataset(X_test, Z_test, y_test)
 
         #train and validate model
-        my_train.init_models(X_shape=X.shape[1], kFold=kFold, hyperparameters=hyperparameters)
+        my_train.init_models(X_shape=X_train.shape[1], kFold=kFold, hyperparameters=hyperparameters)
         my_train.fit_and_validate(X_train, y_train, X_val, y_val, target_col, save_ckpt=False)
 
         #test model
@@ -246,9 +249,17 @@ def final_eval(emb, models, demo, kFold, hyperparameters, filepath):
 
     for target_col in my_train.traits:
         logging.info(f'{10*"-"} {target_col} {10*"-"}')
-        X, y = my_train.prepare_dataset(dataset.X, dataset.contextual_emb, dataset.Y[[target_col]])
-        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.1, stratify=y, random_state=0)
+        X, Z, y = dataset.X, dataset.contextual_emb, dataset.Y[[target_col]]
+        X_train, X_test, Z_train, Z_test, y_train, y_test, = train_test_split(X, Z, y, stratify=y, test_size=0.2, shuffle=True, random_state=42)
         logging.info(f'Train: {X_train.shape}, Test: {X_test.shape}')
+
+        #Select Features
+        # selected_features[target_col] = FeatureSelection.filter_selection(X_train, y_train, 10)
+        selected_features[target_col] = FeatureSelection.get_optimal_features(X_train, y_train)
+        X_train, X_test = X_train[selected_features[target_col]], X_test[selected_features[target_col]]
+
+        X_train, y_train = my_train.prepare_dataset(X_train, Z_train, y_train)
+        X_test, y_test = my_train.prepare_dataset(X_test, Z_test, y_test)
 
         hyperparameters['epochs'] = epochs[target_col]
         my_train.init_models(X_shape=X_train.shape[1], kFold=kFold, hyperparameters=hyperparameters)
@@ -262,11 +273,12 @@ if __name__ == "__main__":
     try:
         emb = sys.argv[1]
         model_type = sys.argv[2]
-        kFold = False #sys.argv[3]
-        demo = 100
+        message = sys.argv [3]
+        kFold = False 
+        demo = None
         eval = True 
         version = 'v4'
-        filepath = f'./data/LIWC_pandora_to_big5_{version}.csv'   
+        filepath = f'./processed_data/LIWC_pandora_to_big5_{version}.csv'   
 
         print(emb, model_type, kFold, demo, eval)
         emb_models = {'1':'roberta-base', '2':'bert-base-uncased', '3':'vinai/bertweet-base', '4':'xlnet-base-cased'}
@@ -283,11 +295,11 @@ if __name__ == "__main__":
             os.makedirs(f'{ckpt}/calibration/')
             os.makedirs(f'{ckpt}/models/')
         logging.basicConfig(filename=f'{ckpt}/log_{timestamp}.log', level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-       
+        logging.info(f'{message}')
         hyperparameters = {
             'hidden_dim' : 256,
             'batch_size': 16,
-            'epochs': 20,
+            'epochs': 32,
             'learning_rate': 0.0001,
             'dropout_rate': 0.3,
         }
