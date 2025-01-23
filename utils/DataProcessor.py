@@ -41,7 +41,6 @@ class PreProcessor:
         nrc_vad = pd.read_csv('data/NRC-VAD-Lexicon/NRC-VAD-Lexicon.csv', sep="\t")  
         nrc_vad_dict = nrc_vad.set_index('Word').to_dict(orient='index')
         def get_vad_scores(text):
-            logging.info(f'{text}')
             words = text.split()
             valence_scores, arousal_scores, dominance_scores = [], [], []
             for word in words:
@@ -181,7 +180,7 @@ class FeatureSelection:
         return ig_df[ig_df['Information Gain'] > threshold]['Feature'].values
 
     def filter_selection(X, y, k=10):
-        logging.info(f"Using SelectKBest for {k} feature selection.")
+        logging.info(f"Using mutual_info_classif for {k} feature selection.")
         selector = SelectKBest(score_func=mutual_info_classif, k=k)
         selector.fit(X, y)
         return X.columns[selector.get_support()]

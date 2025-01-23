@@ -51,30 +51,43 @@ class Dataset:
         logging.info(f'X Shape: {self.X.shape}, Y Shape: {self.Y.shape}, Contextual Emb (Z) Shape: {self.contextual_emb.shape if emb_model else []}')
 
 class My_training:
-    def __init__(self, model_list=None, emb_model=None, traits=None):
-        logging.info(f'Training initiated: emb:{emb_model} models:{model_list}')
-        self.models = model_list if model_list else ['svm', 'lr', 'rf', 'xgb', 'bilstm', 'mlp']
+    def __init__(self, models=None, emb_model=None, traits=None):
+        logging.info(f'Training initiated: emb:{emb_model} models:{models}')
+        self.models = models if models else ['svm', 'lr', 'rf', 'xgb', 'bilstm', 'mlp']
         self.emb_model = emb_model
         self.traits = traits if traits else ['cOPN', 'cCON', 'cEXT', 'cAGR', 'cNEU'] 
         self.test_outputs ={}
         self.val_outputs = {}
         self.cal_outputs ={}
         self.estimators = {}
-        for model in model_list:
+        for model in models:
             self.test_outputs[model] = {}
             self.val_outputs[model]= {}
             self.cal_outputs[model] = {}
         self.test_df = pd.DataFrame()
-        
-    def prepare_dataset(self, stat_df, emb_df, y_df):
-        logging.info(f'{stat_df.shape}, {emb_df.shape}, {y_df.shape}')
+
+    def scale_features(self, X):
         scaler = StandardScaler() 
-        X_df = pd.DataFrame(scaler.fit_transform(stat_df), columns=stat_df.columns)
-        X = np.concatenate([X_df, emb_df], axis=1)
+        X = pd.DataFrame(scaler.fit_transform(X), columns=X.columns)
+        return X
+        
+    def feature_extraction(self, X, y, corr_thres=0.25):
+        corr_matrix = pd.DataFrame(X).corr().abs()
+        upper = corr_matrix.where(np.triu(np.ones(corr_matrix.shape), k=1).astype(bool))
+        to_drop = [column for column in upper.columns if any(upper[column] > corr_thres)]
+        X_reduced = pd.DataFrame(X).drop(to_drop, axis=1)
+        logging.info(f'Correlation Threshold: {corr_thres} dropped: {len(to_drop)}')
+        logging.info(f'Reduced to: {X_reduced.shape} {X_reduced.columns}')
+        fs = FeatureSelection.filter_selection(X_reduced, y)
+        logging.info(f'Feature Selected: {fs}')
+        return fs
+
+    def combine_dataset(self, stat_df, emb_df, y_df):
+        logging.info(f'{stat_df.shape}, {emb_df.shape}, {y_df.shape}')
+        X = np.concatenate([stat_df, emb_df], axis=1)
         X = np.array(X)
         y = np.array(y_df).ravel()
         logging.info(f'Final shape X and y: {X.shape} and {y.shape}')
-        logging.info(f'Data Preparation Completed.')
         return X, y
 
     def init_models(self, X_shape, kFold, hyperparameters):
@@ -146,7 +159,7 @@ class My_training:
 
 def kfold_train(emb, models, demo, filepath):
     logging.info(f'K-Fold Training started: {emb} {models} {demo}')
-    my_train = My_training(model_list=models, emb_model=emb)
+    my_train = My_training(models=models, emb_model=emb)
     dataset = Dataset('./processed_data/2-splits/pandora_train_val.csv', my_train.emb_model, my_train.traits, demo)    
     test_dataset = Dataset('./processed_data/2-splits/pandora_test.csv', my_train.emb_model, my_train.traits, demo)    
     my_train.test_df = test_dataset.ORIGINAL
@@ -198,29 +211,30 @@ def kfold_train(emb, models, demo, filepath):
     my_train.display_metrics(val_outputs, initial='val')
     my_train.display_metrics(test_outputs, initial='test')
     logging.info(f'{selected_features}')
-   
+
 def train(emb, models, demo, kFold, hyperparameters, filepath):
-    my_train = My_training(model_list=models, emb_model=emb)
+    my_train = My_training(models=models, emb_model=emb)
     dataset = Dataset(filepath, my_train.emb_model, my_train.traits,  demo)   
 
     logging.info(50*"*")
     selected_features = {}
     for target_col in my_train.traits:
         logging.info(f'{10*"-"} {target_col} {10*"-"}')
-        #Split data into 3 parts
+        #split data into 3 parts
         X, Z, y = dataset.X, dataset.contextual_emb, dataset.Y[[target_col]]
         X_train, X_test, Z_train, Z_test, y_train, y_test, = train_test_split(X, Z, y, stratify=y, test_size=0.2, shuffle=True, random_state=42)
         X_test, X_val, Z_test, Z_val, y_test, y_val = train_test_split(X_test, Z_test, y_test,  stratify=y_test, test_size=0.5, shuffle=True, random_state=42)
         logging.info(f'Train: {X_train.shape}, Val: {X_val.shape}, Test: {X_test.shape}')
 
-        #Select Features
-        selected_features[target_col] = FeatureSelection.get_optimal_features(X_train, y_train)
-        X_train, X_val, X_test = X_train[selected_features[target_col]], X_val[selected_features[target_col]], X_test[selected_features[target_col]]
+        #scale features, and feature reduction/selection
+        X_train, X_test, X_val = my_train.scale_features(X_train), my_train.scale_features(X_test), my_train.scale_features(X_val)
+        sf = my_train.feature_extraction(X_train, y_train)
+        selected_features[target_col] = sf
 
-        # Scale and prepare X and y
-        X_train, y_train = my_train.prepare_dataset(X_train, Z_train, y_train)
-        X_val, y_val = my_train.prepare_dataset(X_val, Z_val, y_val)
-        X_test, y_test = my_train.prepare_dataset(X_test, Z_test, y_test)
+        #combine reduced X and Z
+        X_train, y_train = my_train.combine_dataset(X_train[sf], Z_train, y_train)
+        X_val, y_val = my_train.combine_dataset(X_val[sf], Z_val, y_val)
+        X_test, y_test = my_train.combine_dataset(X_test[sf], Z_test, y_test)
 
         #train and validate model
         my_train.init_models(X_shape=X_train.shape[1], kFold=kFold, hyperparameters=hyperparameters)
@@ -240,26 +254,27 @@ def train(emb, models, demo, kFold, hyperparameters, filepath):
     logging.info(f'selected_features :{selected_features}')
 
 def final_eval(emb, models, demo, kFold, hyperparameters, filepath):
-    my_train = My_training(model_list=models, emb_model=emb)
+    my_train = My_training(models=models, emb_model=emb)
     dataset = Dataset(filepath, my_train.emb_model, my_train.traits,  demo)   
     logging.info(50*"*")
     selected_features = {}
     epochs = {'cOPN': 17, 'cCON': 13,'cEXT': 16, 'cAGR':17, 'cNEU':15} 
     # my_train.test_df = test_dataset.ORIGINAL
-
     for target_col in my_train.traits:
         logging.info(f'{10*"-"} {target_col} {10*"-"}')
+        #split data into 2 parts
         X, Z, y = dataset.X, dataset.contextual_emb, dataset.Y[[target_col]]
         X_train, X_test, Z_train, Z_test, y_train, y_test, = train_test_split(X, Z, y, stratify=y, test_size=0.2, shuffle=True, random_state=42)
         logging.info(f'Train: {X_train.shape}, Test: {X_test.shape}')
 
-        #Select Features
-        # selected_features[target_col] = FeatureSelection.filter_selection(X_train, y_train, 10)
-        selected_features[target_col] = FeatureSelection.get_optimal_features(X_train, y_train)
-        X_train, X_test = X_train[selected_features[target_col]], X_test[selected_features[target_col]]
+        #scale features, and feature reduction/selection
+        X_train, X_test = my_train.scale_features(X_train), my_train.scale_features(X_test)
+        sf = my_train.feature_extraction(X_train, y_train)
+        selected_features[target_col] = sf
 
-        X_train, y_train = my_train.prepare_dataset(X_train, Z_train, y_train)
-        X_test, y_test = my_train.prepare_dataset(X_test, Z_test, y_test)
+        #combine reduced X and Z
+        X_train, y_train = my_train.combine_dataset(X_train[sf], Z_train, y_train)
+        X_test, y_test = my_train.combine_dataset(X_test[sf], Z_test, y_test)
 
         hyperparameters['epochs'] = epochs[target_col]
         my_train.init_models(X_shape=X_train.shape[1], kFold=kFold, hyperparameters=hyperparameters)
@@ -283,7 +298,7 @@ if __name__ == "__main__":
         print(emb, model_type, kFold, demo, eval)
         emb_models = {'1':'roberta-base', '2':'bert-base-uncased', '3':'vinai/bertweet-base', '4':'xlnet-base-cased'}
         emb = emb_models[emb] if emb in emb_models.keys() else None
-        models = ['lr', 'rf', 'xgb', 'mlp', 'bilstm'] if model_type == 'all' else ['bilstm']
+        models = ['lr', 'rf', 'xgb', 'mlp', 'bilstm'] if model_type == 'all' else ['bilstm', 'mlp']
         print(emb, models, kFold, demo, eval)
 
         timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
