@@ -18,9 +18,12 @@ from sklearn.model_selection import train_test_split, KFold, StratifiedKFold
 from sklearn.calibration import CalibratedClassifierCV
 from utils.Training import _train_one_epoch, _validate_one_epoch, predict, EarlyStopper
 from torch.utils.data import DataLoader, TensorDataset, Subset
+import shap
+shap.initjs()
+
 global ckpt 
 global logging
-
+# big_5_traits = ['agreeableness', 'openness', 'conscientiousness', 'extraversion','neuroticism']
 class ModelCreator:
     def __init__(self, X_shape, kFold, hyperparameters):
         hyperparameters['input_dim'] = X_shape
@@ -71,14 +74,15 @@ class My_training:
         X = pd.DataFrame(scaler.fit_transform(X), columns=X.columns)
         return X
         
-    def feature_extraction(self, X, y, corr_thres=0.25):
+    def feature_extraction(self, X, y, corr_thres=0.25, k=10):
         corr_matrix = pd.DataFrame(X).corr().abs()
         upper = corr_matrix.where(np.triu(np.ones(corr_matrix.shape), k=1).astype(bool))
         to_drop = [column for column in upper.columns if any(upper[column] > corr_thres)]
         X_reduced = pd.DataFrame(X).drop(to_drop, axis=1)
+        # fs = X_reduced.columns
         logging.info(f'Correlation Threshold: {corr_thres} dropped: {len(to_drop)}')
         logging.info(f'Reduced to: {X_reduced.shape} {X_reduced.columns}')
-        fs = FeatureSelection.filter_selection(X_reduced, y)
+        fs = FeatureSelection.filter_selection(X_reduced, y, k)
         logging.info(f'Feature Selected: {fs}')
         return fs
 
@@ -228,7 +232,7 @@ def train(emb, models, demo, kFold, hyperparameters, filepath):
 
         #scale features, and feature reduction/selection
         X_train, X_test, X_val = my_train.scale_features(X_train), my_train.scale_features(X_test), my_train.scale_features(X_val)
-        sf = my_train.feature_extraction(X_train, y_train)
+        sf = my_train.feature_extraction(X_train, y_train, 0.25)
         selected_features[target_col] = sf
 
         #combine reduced X and Z
@@ -264,12 +268,12 @@ def final_eval(emb, models, demo, kFold, hyperparameters, filepath):
         logging.info(f'{10*"-"} {target_col} {10*"-"}')
         #split data into 2 parts
         X, Z, y = dataset.X, dataset.contextual_emb, dataset.Y[[target_col]]
-        X_train, X_test, Z_train, Z_test, y_train, y_test, = train_test_split(X, Z, y, stratify=y, test_size=0.2, shuffle=True, random_state=42)
+        X_train, X_test, Z_train, Z_test, y_train, y_test, = train_test_split(X, Z, y, stratify=y, test_size=0.1, shuffle=True, random_state=42)
         logging.info(f'Train: {X_train.shape}, Test: {X_test.shape}')
 
         #scale features, and feature reduction/selection
         X_train, X_test = my_train.scale_features(X_train), my_train.scale_features(X_test)
-        sf = my_train.feature_extraction(X_train, y_train)
+        sf = my_train.feature_extraction(X_train, y_train, corr_thres=0.25)
         selected_features[target_col] = sf
 
         #combine reduced X and Z
@@ -278,8 +282,16 @@ def final_eval(emb, models, demo, kFold, hyperparameters, filepath):
 
         hyperparameters['epochs'] = epochs[target_col]
         my_train.init_models(X_shape=X_train.shape[1], kFold=kFold, hyperparameters=hyperparameters)
-        my_train.fit(X_train, y_train, target_col, save_ckpt=True)
+        my_train.fit(X_train, y_train, target_col, save_ckpt=False)
         my_train.evaluate_models(X_test, y_test, target_col, calibrate=True)
+
+        # #shap evaluation
+        # explainer = shap.Explainer(my_train.estimators['xgb'], X_train, feature_names=sf)
+        # shap.plots.beeswarm(explainer(X_test))
+        # # shap_values = explainer.shap_values(X_test[sf]) 
+        # # shap.summary_plot(shap_values, X_test[sf], feature_names=sf, max_display=5)
+        # plt.savefig(f"{ckpt}/bee_swarm_{target_col}.png", dpi=150, bbox_inches='tight')
+
     my_train.display_metrics(my_train.test_outputs, initial='final-test')
     # my_train.test_df.to_csv(f'{ckpt}/prediction_test.csv')
     logging.info(f'{selected_features}')
@@ -298,7 +310,7 @@ if __name__ == "__main__":
         print(emb, model_type, kFold, demo, eval)
         emb_models = {'1':'roberta-base', '2':'bert-base-uncased', '3':'vinai/bertweet-base', '4':'xlnet-base-cased'}
         emb = emb_models[emb] if emb in emb_models.keys() else None
-        models = ['lr', 'rf', 'xgb', 'mlp', 'bilstm'] if model_type == 'all' else ['bilstm', 'mlp']
+        models = ['lr', 'rf', 'xgb'] if model_type == 'all' else ['bilstm', 'mlp']
         print(emb, models, kFold, demo, eval)
 
         timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
