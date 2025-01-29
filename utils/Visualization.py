@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 import torch.nn as nn
 import re,os, glob, traceback, nltk, logging, sys
-from sklearn.metrics import accuracy_score, confusion_matrix, ConfusionMatrixDisplay, precision_score, recall_score, f1_score, roc_curve, auc
+from sklearn.metrics import accuracy_score, confusion_matrix, ConfusionMatrixDisplay, precision_score, recall_score, f1_score, roc_curve, auc, brier_score_loss
 from sklearn.calibration import calibration_curve
 
 def calculate_threshold(y_true, y_scores):
@@ -69,7 +69,7 @@ def generate_cm(a_output, filepath=None):
     n_classifiers = len(a_output)
     fig, axes = plt.subplots(1, n_classifiers, figsize=(5 * n_classifiers, 5))
     results = []
-    for ax, (trait, (y_true, y_pred, _)) in zip(axes, a_output.items()):
+    for ax, (trait, (y_true, y_pred, y_scores)) in zip(axes, a_output.items()):
         cm = confusion_matrix(y_true, y_pred)
         disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=["Class 0", "Class 1"])
         disp.plot(cmap=plt.cm.Blues, ax=ax, colorbar=False)
@@ -82,6 +82,9 @@ def generate_cm(a_output, filepath=None):
         f1 = f1_score(y_true, y_pred)
         specificity = tn / (tn + fp) if (tn + fp) > 0 else 0  # Avoid division by zero
         false_positive_rate = fp / (fp + tn) if (fp + tn) > 0 else 0  # Avoid division by zero
+
+        fpr, tpr, thresholds = roc_curve(y_true, y_scores)
+        roc_auc = auc(fpr, tpr)
         results.append( {
             # "Model": model,
             "Classifier": trait,
@@ -91,7 +94,8 @@ def generate_cm(a_output, filepath=None):
             "F1-Score": f1,
             "Specificity": specificity,
             "False Positive Rate": false_positive_rate,
-            "Confusion Matrix": cm 
+            "Confusion Matrix": cm,
+            "roc_auc": roc_auc
         })
     plt.tight_layout()
     if filepath: plt.savefig(filepath)
