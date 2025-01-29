@@ -146,16 +146,19 @@ class My_training:
 
     def display_metrics(self, all_outputs, initial=None, savefig=True):
         logging.info(f'Generating Metrics and Figures.')
-        performance_records = {} 
+        dfs = []
         for model in all_outputs:
             logging.info(15*'='+f" {model} "+ 15*'=')
             a_output = all_outputs[model]
             (cm, auroc, perf) = (f'cm_{initial}', f'auroc_{initial}', f'performance_{initial}') if initial else ('cm', 'auroc', 'performance')
-            performance_records[model] = generate_cm(a_output, f'{ckpt}/{model}_{cm}.png')
+            data = generate_cm(a_output, f'{ckpt}/{model}_{cm}.png')
+            data = [dict(d, **{'model': model}) for d in data]
+            df = pd.DataFrame(data)
+            dfs.append(df)
             generate_auroc(a_output, model, f'{ckpt}/{model}_{auroc}.png')
-            performance_df = pd.DataFrame(performance_records)
-            logging.info(f"Performance df shape: {performance_df.shape}")
-            if savefig: performance_df.to_csv(f"{ckpt}/{perf}.csv")
+        performance_df = pd.concat(dfs, axis=0)
+        logging.info(f"Performance df shape: {performance_df.shape}")
+        if savefig: performance_df.to_csv(f"{ckpt}/{perf}.csv")
             # # for col in self.traits:
             #     s = performance_df[performance_df['Classifier'] ==col]
             #     best_model_row = s.loc[s['Accuracy'].idxmax()]
@@ -231,9 +234,10 @@ def train(emb, models, demo, kFold, hyperparameters, filepath):
         logging.info(f'Train: {X_train.shape}, Val: {X_val.shape}, Test: {X_test.shape}')
 
         #scale features, and feature reduction/selection
-        X_train, X_test, X_val = my_train.scale_features(X_train), my_train.scale_features(X_test), my_train.scale_features(X_val)
-        sf = my_train.feature_extraction(X_train, y_train, 0.25)
-        selected_features[target_col] = sf
+        # X_train, X_test, X_val = my_train.scale_features(X_train), my_train.scale_features(X_test), my_train.scale_features(X_val)
+        # sf = my_train.feature_extraction(X_train, y_train, 0.25)
+        # selected_features[target_col] = sf
+        sf = X_train.columns
 
         #combine reduced X and Z
         X_train, y_train = my_train.combine_dataset(X_train[sf], Z_train, y_train)
@@ -269,6 +273,8 @@ def final_eval(emb, models, demo, kFold, hyperparameters, filepath):
         #split data into 2 parts
         X, Z, y = dataset.X, dataset.contextual_emb, dataset.Y[[target_col]]
         X_train, X_test, Z_train, Z_test, y_train, y_test, = train_test_split(X, Z, y, stratify=y, test_size=0.1, shuffle=True, random_state=42)
+        # X_train, X_test, y_train, y_test, = train_test_split(X, y, stratify=y, test_size=0.1, shuffle=True, random_state=42)
+
         logging.info(f'Train: {X_train.shape}, Test: {X_test.shape}')
 
         #scale features, and feature reduction/selection
@@ -300,17 +306,22 @@ if __name__ == "__main__":
     try:
         emb = sys.argv[1]
         model_type = sys.argv[2]
-        message = sys.argv [3]
+        data_type = sys.argv[3]
+        message = sys.argv[4]
         kFold = False 
         demo = None
-        eval = True 
-        version = 'v4'
-        filepath = f'./processed_data/LIWC_pandora_to_big5_{version}.csv'   
+        eval = False 
+        if data_type == "fb":
+            version = "fb"
+            filepath = f'./processed_data/LIWC_mypersonality_v2.csv'
+        else:
+            version = 'v4'
+            filepath = f'./processed_data/LIWC_pandora_to_big5_{version}.csv'   
 
         print(emb, model_type, kFold, demo, eval)
         emb_models = {'1':'roberta-base', '2':'bert-base-uncased', '3':'vinai/bertweet-base', '4':'xlnet-base-cased'}
         emb = emb_models[emb] if emb in emb_models.keys() else None
-        models = ['lr', 'rf', 'xgb'] if model_type == 'all' else ['bilstm', 'mlp']
+        models = ['lr', 'rf', 'xgb', 'bilstm', 'mlp'] if model_type == 'all' else ['bilstm', 'mlp']
         print(emb, models, kFold, demo, eval)
 
         timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
@@ -324,11 +335,11 @@ if __name__ == "__main__":
         logging.basicConfig(filename=f'{ckpt}/log_{timestamp}.log', level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
         logging.info(f'{message}')
         hyperparameters = {
-            'hidden_dim' : 256,
+            'hidden_dim' : 128,
             'batch_size': 16,
             'epochs': 32,
             'learning_rate': 0.0001,
-            'dropout_rate': 0.3,
+            'dropout_rate': 0.1,
         }
         if eval: final_eval(emb, models, demo, kFold, hyperparameters=hyperparameters, filepath=filepath) 
         else:
