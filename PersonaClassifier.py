@@ -42,7 +42,7 @@ class Dataset:
     def __init__(self, filepath, emb_model, targets, demo):
         logging.info(f'Processing {filepath} Dataset.')
         df = pd.read_csv(filepath) 
-        if demo: df = df.sample(demo, random_state=42)
+        if isinstance(demo, int): df = df.sample(demo, random_state=42)
         logging.info(f'{df.shape}')
         # df =  PreProcessor.clean_up_text(df)
         df = df.loc[:, ~df.columns.str.contains('^Unnamed:')]
@@ -87,7 +87,7 @@ class My_training:
         return fs
 
     def combine_dataset(self, stat_df, emb_df, y_df):
-        logging.info(f'{stat_df.shape}, {emb_df.shape}, {y_df.shape}')
+        logging.info(f'Combining {stat_df.shape}, {emb_df.shape}, {y_df.shape}')
         X = np.concatenate([stat_df, emb_df], axis=1)
         X = np.array(X)
         y = np.array(y_df).ravel()
@@ -117,7 +117,7 @@ class My_training:
         for model in self.models:
             estimator = self.estimators[model]
             estimator.fit(X, y)
-            if save_ckpt: estimator.save_model(f"{ckpt}/models/{estimator.__class__.__name__}_{target_col}.json")
+            if save_ckpt and  model not in ['lr', 'rf']: estimator.save_model(f"{ckpt}/models/{estimator.__class__.__name__}_{target_col}.json")
         logging.info(f'Model Fitted.')
 
     def evaluate_models(self, X, y, target_col, calibrate=False):
@@ -219,7 +219,7 @@ def kfold_train(emb, models, demo, filepath):
     my_train.display_metrics(test_outputs, initial='test')
     logging.info(f'{selected_features}')
 
-def train(emb, models, demo, kFold, hyperparameters, filepath):
+def train(emb, models, demo, kFold, hyperparameters, filepath, mode):
     my_train = My_training(models=models, emb_model=emb)
     dataset = Dataset(filepath, my_train.emb_model, my_train.traits,  demo)   
 
@@ -227,33 +227,42 @@ def train(emb, models, demo, kFold, hyperparameters, filepath):
     selected_features = {}
     for target_col in my_train.traits:
         logging.info(f'{10*"-"} {target_col} {10*"-"}')
-        #split data into 3 parts
         X, Z, y = dataset.X, dataset.contextual_emb, dataset.Y[[target_col]]
-        X_train, X_test, Z_train, Z_test, y_train, y_test, = train_test_split(X, Z, y, stratify=y, test_size=0.2, shuffle=True, random_state=42)
-        X_test, X_val, Z_test, Z_val, y_test, y_val = train_test_split(X_test, Z_test, y_test,  stratify=y_test, test_size=0.5, shuffle=True, random_state=42)
-        logging.info(f'Train: {X_train.shape}, Val: {X_val.shape}, Test: {X_test.shape}')
-
-        #scale features, and feature reduction/selection
-        # X_train, X_test, X_val = my_train.scale_features(X_train), my_train.scale_features(X_test), my_train.scale_features(X_val)
-        # sf = my_train.feature_extraction(X_train, y_train, 0.25)
-        # selected_features[target_col] = sf
-        sf = X_train.columns
-
-        #combine reduced X and Z
-        X_train, y_train = my_train.combine_dataset(X_train[sf], Z_train, y_train)
-        X_val, y_val = my_train.combine_dataset(X_val[sf], Z_val, y_val)
-        X_test, y_test = my_train.combine_dataset(X_test[sf], Z_test, y_test)
+        if mode == "S0":
+            X_train, X_test, y_train, y_test = train_test_split(X, y, stratify=y, test_size=0.2, shuffle=True, random_state=42)
+            X_test, X_val, y_test, y_val = train_test_split(X_test, y_test,  stratify=y_test, test_size=0.5, shuffle=True, random_state=42)
+            X_train, X_val, X_test  = my_train.scale_features(X_train), my_train.scale_features(X_val), my_train.scale_features(X_test)
+            X_train, X_val, X_test = np.array(X_train), np.array(X_val), np.array(X_test)
+            y_train, y_val, y_test = np.array(y_train).ravel(), np.array(y_val).ravel(), np.array(y_test).ravel()
+        elif mode == "S1":
+            Z_train, Z_test, y_train, y_test, = train_test_split(Z, y, stratify=y, test_size=0.2, shuffle=True, random_state=42)
+            Z_val, Z_test, y_val, y_test, = train_test_split(Z_test, y_test, stratify=y_test, test_size=0.5, shuffle=True, random_state=42)
+            X_train, X_val, X_test = np.array(Z_train), np.array(Z_val), np.array(Z_test)
+            y_train, y_val, y_test = np.array(y_train).ravel(), np.array(y_val).ravel(), np.array(y_test).ravel()
+        elif mode == "S2":
+            X_train, X_test, Z_train, Z_test, y_train, y_test, = train_test_split(X, Z, y, stratify=y, test_size=0.2, shuffle=True, random_state=42)
+            X_test, X_val, Z_test, Z_val, y_test, y_val = train_test_split(X_test, Z_test, y_test, stratify=y_test, test_size=0.5, shuffle=True, random_state=42)
+            X_train, X_val, X_test  = my_train.scale_features(X_train), my_train.scale_features(X_val), my_train.scale_features(X_test)
+            X_train, y_train = my_train.combine_dataset(X_train, Z_train, y_train)
+            X_val, y_val = my_train.combine_dataset(X_val, Z_val, y_val)
+            X_test, y_test = my_train.combine_dataset(X_test, Z_test, y_test)
+        elif mode == "S3" :
+            X_train, X_test, Z_train, Z_test, y_train, y_test, = train_test_split(X, Z, y, stratify=y, test_size=0.2, shuffle=True, random_state=42)
+            X_test, X_val, Z_test, Z_val, y_test, y_val = train_test_split(X_test, Z_test, y_test, stratify=y_test, test_size=0.5, shuffle=True, random_state=42)
+            X_train, X_val, X_test  = my_train.scale_features(X_train), my_train.scale_features(X_val), my_train.scale_features(X_test)
+            sf = my_train.feature_extraction(X_train, y_train, corr_thres=0.25) # feature reduction/selection
+            selected_features[target_col] = sf
+            X_train, y_train = my_train.combine_dataset(X_train[sf], Z_train, y_train)
+            X_val, y_val = my_train.combine_dataset(X_val[sf], Z_val, y_val)
+            X_test, y_test = my_train.combine_dataset(X_test[sf], Z_test, y_test)
 
         #train and validate model
         my_train.init_models(X_shape=X_train.shape[1], kFold=kFold, hyperparameters=hyperparameters)
         my_train.fit_and_validate(X_train, y_train, X_val, y_val, target_col, save_ckpt=False)
-
         #test model
         my_train.evaluate_models(X_test, y_test, target_col, calibrate=False)
-
-        #calibrate model 
+        #calibrate model s
         # my_train.calibrate_models(X_val, y_val, X_test, y_test, target_col)
-
         logging.info(50*"-")
     my_train.display_metrics(my_train.val_outputs, initial='val')
     my_train.display_metrics(my_train.test_outputs, initial='test')
@@ -261,34 +270,47 @@ def train(emb, models, demo, kFold, hyperparameters, filepath):
     # pd.DataFrame(selected_features).to_csv(f"{ckpt}/selected_features.csv")
     logging.info(f'selected_features :{selected_features}')
 
-def final_eval(emb, models, demo, kFold, hyperparameters, filepath):
+def final_eval(emb, models, demo, kFold, hyperparameters, filepath, mode):
     my_train = My_training(models=models, emb_model=emb)
     dataset = Dataset(filepath, my_train.emb_model, my_train.traits,  demo)   
+    if mode == 'T': test_dataset = Dataset(f'./processed_data/LIWC_mypersonality_v2.csv', my_train.emb_model, my_train.traits,  demo)   
     logging.info(50*"*")
     selected_features = {}
     epochs = {'cOPN': 17, 'cCON': 13,'cEXT': 16, 'cAGR':17, 'cNEU':15} 
     # my_train.test_df = test_dataset.ORIGINAL
     for target_col in my_train.traits:
         logging.info(f'{10*"-"} {target_col} {10*"-"}')
-        #split data into 2 parts
         X, Z, y = dataset.X, dataset.contextual_emb, dataset.Y[[target_col]]
-        X_train, X_test, Z_train, Z_test, y_train, y_test, = train_test_split(X, Z, y, stratify=y, test_size=0.1, shuffle=True, random_state=42)
-        # X_train, X_test, y_train, y_test, = train_test_split(X, y, stratify=y, test_size=0.1, shuffle=True, random_state=42)
-
-        logging.info(f'Train: {X_train.shape}, Test: {X_test.shape}')
-
-        #scale features, and feature reduction/selection
-        X_train, X_test = my_train.scale_features(X_train), my_train.scale_features(X_test)
-        sf = my_train.feature_extraction(X_train, y_train, corr_thres=0.25)
-        selected_features[target_col] = sf
-
-        #combine reduced X and Z
-        X_train, y_train = my_train.combine_dataset(X_train[sf], Z_train, y_train)
-        X_test, y_test = my_train.combine_dataset(X_test[sf], Z_test, y_test)
+        if mode == "S0":
+            X_train, X_test, y_train, y_test = train_test_split(X, y, stratify=y, test_size=0.1, shuffle=True, random_state=42)
+            X_train, X_test = my_train.scale_features(X_train), my_train.scale_features(X_test)
+            X_train, X_test = np.array(X_train), np.array(X_test)
+            y_train, y_test = np.array(y_train).ravel(), np.array(y_test).ravel()
+        elif mode == "S1":
+            Z_train, Z_test, y_train, y_test, = train_test_split(Z, y, stratify=y, test_size=0.1, shuffle=True, random_state=42)
+            X_train, X_test = np.array(Z_train), np.array(Z_test)
+            y_train, y_test = np.array(y_train).ravel(), np.array(y_test).ravel()
+        elif mode == "S2":
+            X_train, X_test, Z_train, Z_test, y_train, y_test, = train_test_split(X, Z, y, stratify=y, test_size=0.1, shuffle=True, random_state=42)
+            X_train, X_test = my_train.scale_features(X_train), my_train.scale_features(X_test)
+            X_train, y_train = my_train.combine_dataset(X_train, Z_train, y_train)
+            X_test, y_test = my_train.combine_dataset(X_test, Z_test, y_test)
+        elif mode == "S3" :
+            X_train, X_test, Z_train, Z_test, y_train, y_test, = train_test_split(X, Z, y, stratify=y, test_size=0.1, shuffle=True, random_state=42)
+            X_train, X_test = my_train.scale_features(X_train), my_train.scale_features(X_test)
+            sf = selected_features[target_col]
+            X_train, y_train = my_train.combine_dataset(X_train[sf], Z_train, y_train)
+            X_test, y_test = my_train.combine_dataset(X_test[sf], Z_test, y_test)
+        elif mode == "T":
+            X_train, Z_train, y_train = dataset.X, dataset.contextual_emb, dataset.Y[[target_col]]
+            X_test, Z_test, y_test = test_dataset.X, test_dataset.contextual_emb, test_dataset.Y[[target_col]]
+            X_train, X_test = np.array(Z_train), np.array(Z_test)
+            y_train, y_test = np.array(y_train).ravel(), np.array(y_test).ravel()
+        logging.info(f'X Train: {X_train.shape}, X Test: {X_test.shape} Y Train: {y_train.shape}, Y Test: {y_test.shape}')
 
         hyperparameters['epochs'] = epochs[target_col]
         my_train.init_models(X_shape=X_train.shape[1], kFold=kFold, hyperparameters=hyperparameters)
-        my_train.fit(X_train, y_train, target_col, save_ckpt=False)
+        my_train.fit(X_train, y_train, target_col, save_ckpt=True)
         my_train.evaluate_models(X_test, y_test, target_col, calibrate=True)
 
         # #shap evaluation
@@ -302,49 +324,61 @@ def final_eval(emb, models, demo, kFold, hyperparameters, filepath):
     # my_train.test_df.to_csv(f'{ckpt}/prediction_test.csv')
     logging.info(f'{selected_features}')
     
+def parse_arguments(argv):
+    def convert_to_int_if_possible(value):
+        try:
+            return int(value)
+        except ValueError:
+            return value
+    print(argv)
+    emb = argv[1]
+    model_type = argv[2]
+    data_type = argv[3]
+    mode = argv[4]
+    eval = argv[5] 
+    demo = argv[6]
+    kFold = False 
+    message = argv[7]
+    emb_models = {'1':'roberta-base', '2':'bert-base-uncased', '3':'vinai/bertweet-base', '4':'xlnet-base-cased'}
+    emb = emb_models[emb] if emb in emb_models.keys() else None
+
+    models = ['lr', 'rf', 'xgb', 'bilstm', 'mlp']
+    if model_type != "all" and model_type not in models:
+        print(f"not a valid modeltype {model_type}")
+        exit(0)  
+
+    models = models if model_type=='all' else [model_type]
+    if demo=="demo": demo =100
+    demo = convert_to_int_if_possible(demo)
+    print(f"emb:{emb}, models:{models}, data_type:{data_type}, mode:{mode}, eval:{eval}, demo:{demo}, message:{message}, kFold={kFold}")
+    return emb, model_type, data_type, mode, eval, demo, kFold, message, models
+ 
 if __name__ == "__main__":
     try:
-        emb = sys.argv[1]
-        model_type = sys.argv[2]
-        data_type = sys.argv[3]
-        message = sys.argv[4]
-        kFold = False 
-        demo = None
-        eval = False 
-        if data_type == "fb":
-            version = "fb"
-            filepath = f'./processed_data/LIWC_mypersonality_v2.csv'
-        else:
-            version = 'v4'
-            filepath = f'./processed_data/LIWC_pandora_to_big5_{version}.csv'   
+        emb, model_type, data_type, mode, eval, demo, kFold, message, models = parse_arguments(sys.argv)
 
-        print(emb, model_type, kFold, demo, eval)
-        emb_models = {'1':'roberta-base', '2':'bert-base-uncased', '3':'vinai/bertweet-base', '4':'xlnet-base-cased'}
-        emb = emb_models[emb] if emb in emb_models.keys() else None
-        models = ['lr', 'rf', 'xgb', 'bilstm', 'mlp'] if model_type == 'all' else ['bilstm', 'mlp']
-        print(emb, models, kFold, demo, eval)
-
+        version = 'fb' if data_type == "fb" else "v4" 
+        filepath = f'./processed_data/LIWC_mypersonality_v2.csv'  if data_type == "fb" else f'./processed_data/LIWC_pandora_to_big5_{version}.csv'  
         timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
-        folder = f"{version}_{model_type}_{emb.split('-')[0]}-{timestamp}" if emb else f"{timestamp}"
-        if eval: folder = f"{folder}_final_eval"
-        if demo: folder = f"{folder}_demo"
-        ckpt = f"checkpoint/{folder}"
+        folder = f"{version}_{model_type}_{emb.split('-')[0]}-{timestamp}_{eval}" if emb else  f"{version}_{model_type}-{timestamp}_{eval}"
+        if isinstance(demo, int) : folder = f"{folder}_demo"
+        ckpt = f"checkpoint/{folder}_{mode}"
         if not os.path.exists(ckpt):
             os.makedirs(f'{ckpt}/calibration/')
             os.makedirs(f'{ckpt}/models/')
         logging.basicConfig(filename=f'{ckpt}/log_{timestamp}.log', level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-        logging.info(f'{message}')
+        logging.info(f"emb:{emb}, models:{models}, data_type:{data_type}, mode:{mode}, eval:{eval}, demo:{demo}, message:{message}, kFold={kFold}")
         hyperparameters = {
-            'hidden_dim' : 128,
+            'hidden_dim' : 256,
             'batch_size': 16,
             'epochs': 32,
             'learning_rate': 0.0001,
-            'dropout_rate': 0.1,
+            'dropout_rate': 0.3,
         }
-        if eval: final_eval(emb, models, demo, kFold, hyperparameters=hyperparameters, filepath=filepath) 
+        if eval == 'eval': final_eval(emb, models, demo, kFold, hyperparameters=hyperparameters, filepath=filepath, mode=mode)
         else:
             if kFold: kfold_train(emb, models, demo, filepath =filepath)
-            else: train(emb, models, demo, kFold=kFold, hyperparameters=hyperparameters, filepath=filepath)
+            else: train(emb, models, demo, kFold=kFold, hyperparameters=hyperparameters, filepath=filepath, mode=mode)
 
     except:
         traceback.print_exc()
