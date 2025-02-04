@@ -42,11 +42,14 @@ class Dataset:
     def __init__(self, filepath, emb_model, targets, demo):
         logging.info(f'Processing {filepath} Dataset.')
         df = pd.read_csv(filepath) 
+        df = df.rename(columns={'agreeableness':'cAGR', 'openness':'cOPN', 'conscientiousness':'cCON', 'extraversion':'cEXT', 'neuroticism':'cNEU'})
+        df = df.loc[:, ~df.columns.str.contains('^type')]
         if isinstance(demo, int): df = df.sample(demo, random_state=42)
         logging.info(f'{df.shape}')
-        # df =  PreProcessor.clean_up_text(df)
-        df = df.loc[:, ~df.columns.str.contains('^Unnamed:')]
-        df = df.loc[:, ~df.columns.str.contains('^#AUTHID:')]
+        df =  PreProcessor.clean_up_text(df)
+        df = df.loc[:, ~df.columns.str.contains('^Unnamed')]
+        df = df.loc[:, ~df.columns.str.contains('^#AUTHID')]
+        logging.info(df.head(1))
         self.contextual_emb = PreProcessor.process_embeddings(df, emb_model) if emb_model else []
         self.X = df.drop(['STATUS'] + targets, axis=1) #remove #AUTHID for V1
         self.Y = df[targets]
@@ -270,6 +273,33 @@ def train(emb, models, demo, kFold, hyperparameters, filepath, mode):
     # pd.DataFrame(selected_features).to_csv(f"{ckpt}/selected_features.csv")
     logging.info(f'selected_features :{selected_features}')
 
+def regression_train(emb, models, demo, kFold, hyperparameters, filepath, mode):
+    my_train = My_training(models=models, emb_model=emb)
+    dataset = Dataset(filepath, my_train.emb_model, my_train.traits,  demo)   
+    logging.info(50*"*")
+    for target_col in my_train.traits:
+        logging.info(f'{10*"-"} {target_col} {10*"-"}')
+        X, Z, y = dataset.X, dataset.contextual_emb, dataset.Y[[target_col]]
+        if mode == "S1":
+            Z_train, Z_test, y_train, y_test, = train_test_split(Z, y, test_size=0.2, shuffle=True, random_state=42)
+            Z_val, Z_test, y_val, y_test, = train_test_split(Z_test, y_test, test_size=0.5, shuffle=True, random_state=42)
+            X_train, X_val, X_test = np.array(Z_train), np.array(Z_val), np.array(Z_test)
+            y_train, y_val, y_test = np.array(y_train).ravel(), np.array(y_val).ravel(), np.array(y_test).ravel()
+
+        logging.info(f"{X_train.shape}, {X_val.shape}, {X_test.shape}")
+        from utils.RegressionModels import RegressionModel, train_val, evaluate_model, plot_learning_curve
+        import torch.optim as optim
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        model = RegressionModel(input_dim=X_train.shape[1]).to(device)
+        optimizer = optim.Adam(model.parameters(), lr=0.0001)
+        train_losses, val_losses = train_val(model, X_train, y_train, X_val, y_val,
+            device=device, batch_size=16, epochs=100, optimizer=optimizer, max_grad_norm=1.0
+        )
+        plot_learning_curve(train_losses, val_losses, f"{ckpt}/learning_curve_{target_col}.png")
+        logging.info(f'Final Validation RMSE: {val_losses[-1]:.4f}')
+        _, _, mse, mae, r2, _, _ = evaluate_model(model, X_test, y_test, device)
+        logging.info(f"Test MSE: {mse:.4f}")
+
 def final_eval(emb, models, demo, kFold, hyperparameters, filepath, mode):
     my_train = My_training(models=models, emb_model=emb)
     dataset = Dataset(filepath, my_train.emb_model, my_train.traits,  demo)   
@@ -356,9 +386,8 @@ def parse_arguments(argv):
 if __name__ == "__main__":
     try:
         emb, model_type, data_type, mode, eval, demo, kFold, message, models = parse_arguments(sys.argv)
-
-        version = 'fb' if data_type == "fb" else "v4" 
-        filepath = f'./processed_data/LIWC_mypersonality_v2.csv'  if data_type == "fb" else f'./processed_data/LIWC_pandora_to_big5_{version}.csv'  
+        version = 'fb' if data_type == "fb" else "v5" 
+        filepath = f'./processed_data/LIWC_mypersonality_v2.csv'  if data_type == "fb" else f'./data/pandora_to_big5_{version}.csv'  
         timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
         folder = f"{version}_{model_type}_{emb.split('-')[0]}-{timestamp}_{eval}" if emb else  f"{version}_{model_type}-{timestamp}_{eval}"
         if isinstance(demo, int) : folder = f"{folder}_demo"
@@ -375,7 +404,12 @@ if __name__ == "__main__":
             'learning_rate': 0.0001,
             'dropout_rate': 0.3,
         }
-        if eval == 'eval': final_eval(emb, models, demo, kFold, hyperparameters=hyperparameters, filepath=filepath, mode=mode)
+        if version =='v5': 
+            regression_train(emb, models, demo, kFold=kFold, hyperparameters=hyperparameters, filepath=filepath, mode=mode)
+            return
+        
+        if eval == 'eval': 
+            final_eval(emb, models, demo, kFold, hyperparameters=hyperparameters, filepath=filepath, mode=mode)
         else:
             if kFold: kfold_train(emb, models, demo, filepath =filepath)
             else: train(emb, models, demo, kFold=kFold, hyperparameters=hyperparameters, filepath=filepath, mode=mode)
