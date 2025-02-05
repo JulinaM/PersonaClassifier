@@ -404,15 +404,14 @@ if __name__ == "__main__":
             'learning_rate': 0.0001,
             'dropout_rate': 0.3,
         }
-        if version =='v5': 
-            regression_train(emb, models, demo, kFold=kFold, hyperparameters=hyperparameters, filepath=filepath, mode=mode)
-            return
         
         if eval == 'eval': 
             final_eval(emb, models, demo, kFold, hyperparameters=hyperparameters, filepath=filepath, mode=mode)
-        else:
-            if kFold: kfold_train(emb, models, demo, filepath =filepath)
-            else: train(emb, models, demo, kFold=kFold, hyperparameters=hyperparameters, filepath=filepath, mode=mode)
+        else: # eval == 'train'
+            if version =='v5': regression_train(emb, models, demo, kFold=kFold, hyperparameters=hyperparameters, filepath=filepath, mode=mode)
+            else:
+                if kFold: kfold_train(emb, models, demo, filepath =filepath)
+                else: train(emb, models, demo, kFold=kFold, hyperparameters=hyperparameters, filepath=filepath, mode=mode)
 
     except:
         traceback.print_exc()
