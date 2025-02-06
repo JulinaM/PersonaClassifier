@@ -18,15 +18,54 @@ class RegressionModel(nn.Module):
         self.fc1 = nn.Linear(input_dim, hidden_dim)
         self.fc2 = nn.Linear(hidden_dim, hidden_dim)
         self.fc3 = nn.Linear(hidden_dim, 1)  # Single output for regression
-        self.dropout_layer = nn.Dropout(dropout)
+        self.dropout = nn.Dropout(dropout)
         self.relu = nn.ReLU()
     
     def forward(self, x):
         x = self.relu(self.fc1(x))
-        x = self.dropout_layer(x)
+        x = self.dropout(x)
         x = self.relu(self.fc2(x))
-        x = self.fc3(x)  # No activation for regression
+        x = self.dropout(x)
+        x = self.fc3(x)  
+        x = torch.sigmoid(x) * 100  # Scale to 1-100
         return x
+
+class DotProductAttention(nn.Module):
+    def __init__(self, hidden_dim):
+        super(DotProductAttention, self).__init__()
+    def forward(self, x):
+        query = x[:, -1:, :]  # Shape: (batch_size, 1, hidden_dim * 2)
+        scores = torch.bmm(query, x.transpose(1, 2))  # Shape: (batch_size, 1, seq_len)
+        attention_weights = torch.softmax(scores, dim=-1)  # Shape: (batch_size, seq_len, 1)
+        context_vector = torch.bmm(attention_weights, x)  # Shape: (batch_size, 1, hidden_dim * 2)
+        return context_vector, attention_weights
+
+class BiLSTMClassifier(nn.Module):
+    def __init__(self, input_dim, hidden_dim, dropout, num_layers=2, bidirectional=True, do_attention=True, output_dim=1):
+        super(BiLSTMClassifier, self).__init__()
+        self.do_attention = do_attention
+        self.attention = DotProductAttention(hidden_dim)
+        self.lstm = nn.LSTM(input_dim, hidden_dim, num_layers, bidirectional=bidirectional, batch_first=True, dropout=dropout)
+        self.fc = nn.Linear(hidden_dim * 2 if bidirectional else hidden_dim, output_dim)
+        self.layer_norm1 = nn.LayerNorm(input_dim) 
+        self.layer_norm2 = nn.LayerNorm(hidden_dim * 2)  
+        self.dropout = nn.Dropout(dropout)  
+        self.sigmoid =  nn.Sigmoid()
+    def forward(self, x):
+        if len(x.size()) == 2:
+            x = x.unsqueeze(1)  
+        if self.do_attention:
+            context_vector, attention_weights = self.attention(x)
+            context_vector = self.layer_norm1(context_vector)
+        else:
+            context_vector = x
+        lstm_output, _ = self.lstm(context_vector)     
+        lstm_output = self.layer_norm2(lstm_output)
+        last_hidden_state = lstm_output[:, -1, :]  # Shape: (batch_size, hidden_dim * 2)
+        last_hidden_state = self.dropout(last_hidden_state)
+        output = self.fc(last_hidden_state)  
+        output = self.sigmoid(output) *100
+        return output
 
 class EarlyStopper:
     def __init__(self, patience=3, min_delta=0.001):
@@ -50,9 +89,9 @@ def _train_one_epoch(model, train_loader, device, criterion, optimizer, max_grad
         inputs, targets = inputs.to(device), targets.to(device)
         optimizer.zero_grad()
         outputs = model(inputs)  # No sigmoid for regression
-        loss = criterion(outputs, targets.unsqueeze(1))  # Ensure target shape matches output
+        loss = criterion(outputs, targets.unsqueeze(1))  
         loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)  # Gradient clipping
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)  
         optimizer.step()
         train_loss += loss.item()
     train_loss /= len(train_loader)  # Compute mean loss
@@ -94,6 +133,7 @@ def train_val(model, X_train, y_train, X_val, y_val, device, batch_size, epochs,
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
 
     criterion = nn.MSELoss()  # Use MSELoss for RMSE calculation
+    # criterion = nn.MAELoss()
     early_stopper = EarlyStopper(patience=3, min_delta=0.001)
     train_losses, val_losses = [], []
     for epoch in range(epochs):
