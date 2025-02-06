@@ -39,16 +39,16 @@ class ModelCreator:
         }
 
 class Dataset:
-    def __init__(self, filepath, emb_model, targets, demo):
+    def __init__(self, filepath, emb_model, targets, demo, version=None):
         logging.info(f'Processing {filepath} Dataset.')
         df = pd.read_csv(filepath) 
-        df = df.rename(columns={'agreeableness':'cAGR', 'openness':'cOPN', 'conscientiousness':'cCON', 'extraversion':'cEXT', 'neuroticism':'cNEU'})
-        df = df.loc[:, ~df.columns.str.contains('^type')]
         if isinstance(demo, int): df = df.sample(demo, random_state=42)
         logging.info(f'{df.shape}')
-        df =  PreProcessor.clean_up_text(df)
+        if version =='v5': df = df.rename(columns={'agreeableness':'cAGR', 'openness':'cOPN', 'conscientiousness':'cCON', 'extraversion':'cEXT', 'neuroticism':'cNEU'})
+        df = df.loc[:, ~df.columns.str.contains('^type')]
         df = df.loc[:, ~df.columns.str.contains('^Unnamed')]
         df = df.loc[:, ~df.columns.str.contains('^#AUTHID')]
+        if version =='v5':df =  PreProcessor.clean_up_text(df)
         logging.info(df.head(1))
         self.contextual_emb = PreProcessor.process_embeddings(df, emb_model) if emb_model else []
         self.X = df.drop(['STATUS'] + targets, axis=1) #remove #AUTHID for V1
@@ -273,9 +273,9 @@ def train(emb, models, demo, kFold, hyperparameters, filepath, mode):
     # pd.DataFrame(selected_features).to_csv(f"{ckpt}/selected_features.csv")
     logging.info(f'selected_features :{selected_features}')
 
-def regression_train(emb, models, demo, kFold, hyperparameters, filepath, mode):
+def regression_train(emb, models, demo, kFold, hyperparameters, filepath, mode, version):
     my_train = My_training(models=models, emb_model=emb)
-    dataset = Dataset(filepath, my_train.emb_model, my_train.traits,  demo)   
+    dataset = Dataset(filepath, my_train.emb_model, my_train.traits,  demo, version)   
     logging.info(50*"*")
     for target_col in my_train.traits:
         logging.info(f'{10*"-"} {target_col} {10*"-"}')
@@ -287,13 +287,13 @@ def regression_train(emb, models, demo, kFold, hyperparameters, filepath, mode):
             y_train, y_val, y_test = np.array(y_train).ravel(), np.array(y_val).ravel(), np.array(y_test).ravel()
 
         logging.info(f"{X_train.shape}, {X_val.shape}, {X_test.shape}")
-        from utils.RegressionModels import RegressionModel, train_val, evaluate_model, plot_learning_curve
+        from utils.RegressionModels import RegressionModel, train_val, evaluate_model, plot_learning_curve, BiLSTMClassifier
         import torch.optim as optim
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        model = RegressionModel(input_dim=X_train.shape[1]).to(device)
-        optimizer = optim.Adam(model.parameters(), lr=0.0001)
+        model = BiLSTMClassifier(input_dim=X_train.shape[1], hidden_dim=hyperparameters["hidden_dim"], dropout=hyperparameters["dropout_rate"]).to(device)
+        optimizer = optim.Adam(model.parameters(), lr=hyperparameters["learning_rate"])
         train_losses, val_losses = train_val(model, X_train, y_train, X_val, y_val,
-            device=device, batch_size=16, epochs=100, optimizer=optimizer, max_grad_norm=1.0
+            device=device, batch_size=hyperparameters["batch_size"], epochs=hyperparameters["epochs"], optimizer=optimizer, max_grad_norm=1.0
         )
         plot_learning_curve(train_losses, val_losses, f"{ckpt}/learning_curve_{target_col}.png")
         logging.info(f'Final Validation RMSE: {val_losses[-1]:.4f}')
@@ -399,16 +399,16 @@ if __name__ == "__main__":
         logging.info(f"emb:{emb}, models:{models}, data_type:{data_type}, mode:{mode}, eval:{eval}, demo:{demo}, message:{message}, kFold={kFold}")
         hyperparameters = {
             'hidden_dim' : 256,
-            'batch_size': 16,
-            'epochs': 32,
-            'learning_rate': 0.0001,
+            'batch_size': 8,
+            'epochs': 100,
+            'learning_rate': 0.00001,
             'dropout_rate': 0.3,
         }
-        
+        logging.info(f"hyperparameters:{hyperparameters}")
         if eval == 'eval': 
             final_eval(emb, models, demo, kFold, hyperparameters=hyperparameters, filepath=filepath, mode=mode)
         else: # eval == 'train'
-            if version =='v5': regression_train(emb, models, demo, kFold=kFold, hyperparameters=hyperparameters, filepath=filepath, mode=mode)
+            if version =='v5': regression_train(emb, models, demo, kFold=kFold, hyperparameters=hyperparameters, filepath=filepath, mode=mode, version=version)
             else:
                 if kFold: kfold_train(emb, models, demo, filepath =filepath)
                 else: train(emb, models, demo, kFold=kFold, hyperparameters=hyperparameters, filepath=filepath, mode=mode)
