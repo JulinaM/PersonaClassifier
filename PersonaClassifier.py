@@ -44,11 +44,12 @@ class Dataset:
         df = pd.read_csv(filepath) 
         if isinstance(demo, int): df = df.sample(demo, random_state=42)
         logging.info(f'{df.shape}')
-        if version =='v5': df = df.rename(columns={'agreeableness':'cAGR', 'openness':'cOPN', 'conscientiousness':'cCON', 'extraversion':'cEXT', 'neuroticism':'cNEU'})
-        df = df.loc[:, ~df.columns.str.contains('^type')]
+        if filepath.split('_')[-1] =='main.csv': 
+            df = df[['author', 'body', 'agreeableness', 'openness', 'conscientiousness', 'extraversion', 'neuroticism']] # more embedding
+            df = df.rename(columns= { 'body': 'STATUS', 'agreeableness':'cAGR', 'openness':'cOPN', 'conscientiousness':'cCON', 'extraversion':'cEXT', 'neuroticism':'cNEU'})
         df = df.loc[:, ~df.columns.str.contains('^Unnamed')]
         df = df.loc[:, ~df.columns.str.contains('^#AUTHID')]
-        if version =='v5':df =  PreProcessor.clean_up_text(df)
+        PreProcessor.clean_up_text(df)
         logging.info(df.head(1))
         self.contextual_emb = PreProcessor.process_embeddings(df, emb_model) if emb_model else []
         self.X = df.drop(['STATUS'] + targets, axis=1) #remove #AUTHID for V1
@@ -290,7 +291,8 @@ def regression_train(emb, models, demo, kFold, hyperparameters, filepath, mode, 
         from utils.RegressionModels import RegressionModel, train_val, evaluate_model, plot_learning_curve, BiLSTMClassifier
         import torch.optim as optim
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        model = BiLSTMClassifier(input_dim=X_train.shape[1], hidden_dim=hyperparameters["hidden_dim"], dropout=hyperparameters["dropout_rate"]).to(device)
+        # model = BiLSTMClassifier(input_dim=X_train.shape[1], hidden_dim=hyperparameters["hidden_dim"], dropout=hyperparameters["dropout_rate"]).to(device)
+        model = RegressionModel(input_dim=X_train.shape[1], hidden_dim=hyperparameters["hidden_dim"], dropout=hyperparameters["dropout_rate"]).to(device)
         optimizer = optim.Adam(model.parameters(), lr=hyperparameters["learning_rate"])
         train_losses, val_losses = train_val(model, X_train, y_train, X_val, y_val,
             device=device, batch_size=hyperparameters["batch_size"], epochs=hyperparameters["epochs"], optimizer=optimizer, max_grad_norm=1.0
@@ -367,8 +369,9 @@ def parse_arguments(argv):
     mode = argv[4]
     eval = argv[5] 
     demo = argv[6]
+    version = argv[7]
     kFold = False 
-    message = argv[7]
+    message = argv[8]
     emb_models = {'1':'roberta-base', '2':'bert-base-uncased', '3':'vinai/bertweet-base', '4':'xlnet-base-cased'}
     emb = emb_models[emb] if emb in emb_models.keys() else None
 
@@ -380,38 +383,48 @@ def parse_arguments(argv):
     models = models if model_type=='all' else [model_type]
     if demo=="demo": demo =100
     demo = convert_to_int_if_possible(demo)
-    print(f"emb:{emb}, models:{models}, data_type:{data_type}, mode:{mode}, eval:{eval}, demo:{demo}, message:{message}, kFold={kFold}")
-    return emb, model_type, data_type, mode, eval, demo, kFold, message, models
+    print(f"emb:{emb}, models:{models}, data_type:{data_type}, mode:{mode}, eval:{eval}, demo:{demo}, version:{version}, message:{message}, kFold={kFold}")
+    return emb, model_type, data_type, mode, eval, demo, version, kFold, message, models
  
 if __name__ == "__main__":
     try:
-        emb, model_type, data_type, mode, eval, demo, kFold, message, models = parse_arguments(sys.argv)
-        version = 'fb' if data_type == "fb" else "v5" 
-        filepath = f'./processed_data/LIWC_mypersonality_v2.csv'  if data_type == "fb" else f'./data/pandora_to_big5_{version}.csv'  
+        emb, model_type, data_type, mode, eval, demo, version, kFold, message, models = parse_arguments(sys.argv)
+        if data_type =='fb':
+            version = 'v2'
+            filepath = f'./processed_data/LIWC_mypersonality_{version}.csv' 
+        else:
+            if version =='v5' or version =='v3': 
+                filepath = f'./data/pandora_to_big5_main.csv'  
+            else:
+                filepath = f'./data/pandora_to_big5_{version}.csv'  
+
         timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
-        folder = f"{version}_{model_type}_{emb.split('-')[0]}-{timestamp}_{eval}" if emb else  f"{version}_{model_type}-{timestamp}_{eval}"
+        folder = f"{data_type}_{version}_{model_type}_{emb.split('-')[0]}-{timestamp}_{eval}" if emb else  f"{version}_{model_type}-{timestamp}_{eval}"
         if isinstance(demo, int) : folder = f"{folder}_demo"
         ckpt = f"checkpoint/{folder}_{mode}"
         if not os.path.exists(ckpt):
             os.makedirs(f'{ckpt}/calibration/')
             os.makedirs(f'{ckpt}/models/')
         logging.basicConfig(filename=f'{ckpt}/log_{timestamp}.log', level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-        logging.info(f"emb:{emb}, models:{models}, data_type:{data_type}, mode:{mode}, eval:{eval}, demo:{demo}, message:{message}, kFold={kFold}")
+        logging.info(f"emb:{emb}, models:{models}, data_type:{data_type}, mode:{mode}, eval:{eval}, demo:{demo}, version:{version}, message:{message}, kFold={kFold}")
         hyperparameters = {
-            'hidden_dim' : 256,
+            'hidden_dim' : 300,
             'batch_size': 8,
             'epochs': 100,
             'learning_rate': 0.00001,
             'dropout_rate': 0.3,
         }
         logging.info(f"hyperparameters:{hyperparameters}")
+
+        if version =='v5': #regresssion
+            regression_train(emb, models, demo, kFold=kFold, hyperparameters=hyperparameters, filepath=filepath, mode=mode, version=version)
+            sys.exit(1) 
+
         if eval == 'eval': 
             final_eval(emb, models, demo, kFold, hyperparameters=hyperparameters, filepath=filepath, mode=mode)
         else: # eval == 'train'
-            if version =='v5': regression_train(emb, models, demo, kFold=kFold, hyperparameters=hyperparameters, filepath=filepath, mode=mode, version=version)
-            else:
-                if kFold: kfold_train(emb, models, demo, filepath =filepath)
-                else: train(emb, models, demo, kFold=kFold, hyperparameters=hyperparameters, filepath=filepath, mode=mode)
+            if kFold: kfold_train(emb, models, demo, filepath =filepath)
+            else: train(emb, models, demo, kFold=kFold, hyperparameters=hyperparameters, filepath=filepath, mode=mode)
 
     except:
         traceback.print_exc()
