@@ -9,25 +9,25 @@ from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
 logging.basicConfig(level=logging.INFO)
 import matplotlib.pyplot as plt
 
-
-# Sample Neural Network Model for Regression
 class RegressionModel(nn.Module):
     def __init__(self, input_dim, hidden_dim=256, dropout=0.3):
         super(RegressionModel, self).__init__()
-        self.dropout = dropout
         self.fc1 = nn.Linear(input_dim, hidden_dim)
         self.fc2 = nn.Linear(hidden_dim, hidden_dim)
         self.fc3 = nn.Linear(hidden_dim, 1)  # Single output for regression
         self.dropout = nn.Dropout(dropout)
         self.relu = nn.ReLU()
+        self.bn1 = nn.BatchNorm1d(hidden_dim) 
     
     def forward(self, x):
-        x = self.relu(self.fc1(x))
+        x = self.fc1(x)
+        x = self.bn1(x)
+        x = self.relu(x)
         x = self.dropout(x)
         x = self.relu(self.fc2(x))
         x = self.dropout(x)
         x = self.fc3(x)  
-        x = torch.sigmoid(x) * 100  # Scale to 1-100
+        x = torch.sigmoid(x) * 100  
         return x
 
 class DotProductAttention(nn.Module):

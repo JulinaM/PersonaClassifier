@@ -133,6 +133,28 @@ class PreProcessor:
         logging.info(f"After Clean up: {df.shape}")
         return df
 
+    def generate_target_labels(df, retain_columns):
+        from sklearn.preprocessing import MinMaxScaler, StandardScaler
+        df_list = []
+        n_cols = ['cOPN', 'cEXT', 'cNEU', 'cAGR', 'cCON']
+        norm_cols = ['nOPN', ' nEXT', 'nNEU', 'nAGR', 'nCON']
+        big_5_traits = ['agreeableness', 'openness', 'conscientiousness', 'extraversion','neuroticism']
+        for score_type in ['percentiles', 'scores', 'description']:
+            demo_df = df[df['type'] == score_type]
+            min_max_scaler = MinMaxScaler(feature_range=(0, 1))
+            standard_scaler = StandardScaler()
+            for col, n_col, norm_col in zip(big_5_traits, n_cols, norm_cols):
+                #v4
+                demo_df[norm_col] = min_max_scaler.fit_transform(demo_df[[col]]) 
+                threshold = np.median(demo_df[[norm_col]]) 
+                demo_df[n_col] = (demo_df[norm_col] >= threshold).astype(int) 
+                # logging.info(f'{threshold}')
+            df_list.append(demo_df)
+        df = pd.concat(df_list) 
+        for trait in n_cols:
+            logging.info(f'{df[trait].value_counts()}')
+        return df[retain_columns]
+
     def process_embeddings(df, model_name, batch_size=8):
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
