@@ -39,21 +39,43 @@ class ModelCreator:
         }
 
 class Dataset:
-    def __init__(self, filepath, emb_model, targets, demo, version=None):
+    def __init__(self, filepath, emb_model, targets, demo, task='classification'):
         logging.info(f'Processing {filepath} Dataset.')
         df = pd.read_csv(filepath) 
         if isinstance(demo, int): df = df.sample(demo, random_state=42)
         logging.info(f'{df.shape}')
-        if filepath.split('_')[-1] =='main.csv': 
-            df = df[['author', 'body', 'agreeableness', 'openness', 'conscientiousness', 'extraversion', 'neuroticism']] # more embedding
-            df = df.rename(columns= { 'body': 'STATUS', 'agreeableness':'cAGR', 'openness':'cOPN', 'conscientiousness':'cCON', 'extraversion':'cEXT', 'neuroticism':'cNEU'})
-        df = df.loc[:, ~df.columns.str.contains('^Unnamed')]
-        df = df.loc[:, ~df.columns.str.contains('^#AUTHID')]
-        PreProcessor.clean_up_text(df)
-        logging.info(df.head(1))
-        self.contextual_emb = PreProcessor.process_embeddings(df, emb_model) if emb_model else []
-        self.X = df.drop(['STATUS'] + targets, axis=1) #remove #AUTHID for V1
-        self.Y = df[targets]
+        if task == "regression":
+            if emb_model == 'openai':
+                df = df[['body', 'agreeableness', 'openness', 'conscientiousness', 'extraversion', 'neuroticism', 'openai_embedding']] # more embedding
+                df = df.rename(columns= { 'body': 'STATUS', 'agreeableness':'cAGR', 'openness':'cOPN', 'conscientiousness':'cCON', 'extraversion':'cEXT', 'neuroticism':'cNEU'})
+                self.X = df.drop(['STATUS', 'openai_embedding'] + targets, axis=1) # doesn't support statistical features 
+                df['openai_embedding'] = df['openai_embedding'].apply(eval).apply(np.array)
+                self.contextual_emb = pd.DataFrame(df["openai_embedding"].to_list(), index=df.index)
+                self.Y = df[targets]
+            else: #roberta-embedding
+                df = df[['body', 'agreeableness', 'openness', 'conscientiousness', 'extraversion', 'neuroticism']] # more embedding
+                df = df.rename(columns= { 'body': 'STATUS', 'agreeableness':'cAGR', 'openness':'cOPN', 'conscientiousness':'cCON', 'extraversion':'cEXT', 'neuroticism':'cNEU'})
+                self.X = df.drop(['STATUS', 'openai_embedding'] + targets, axis=1) # doesn't support statistical features 
+                self.contextual_emb = PreProcessor.process_embeddings(df, emb_model) if emb_model else []
+                self.Y = df[targets]
+        elif task == "classification":
+            if emb_model =='openai':
+                df = df[['body', 'agreeableness', 'openness', 'conscientiousness', 'extraversion', 'neuroticism', 'type', 'openai_embedding']] # more embedding
+                df = df.rename(columns= {'body': 'STATUS'})
+                df = PreProcessor.generate_target_labels(df, ['STATUS', 'openai_embedding']+targets)
+                self.X = df.drop(['STATUS', 'openai_embedding'] + targets, axis=1) # doesn't support statistical features 
+                df['openai_embedding'] = df['openai_embedding'].apply(eval).apply(np.array)
+                self.contextual_emb = pd.DataFrame(df["openai_embedding"].to_list(), index=df.index)
+                # self.contextual_emb = df['openai_embedding'].apply(eval).apply(np.array)
+                self.Y = df[targets]
+            else:
+                df = df.loc[:, ~df.columns.str.contains('^Unnamed')]
+                df = df.loc[:, ~df.columns.str.contains('^#AUTHID')]
+                df = df.rename(columns= {'body': 'STATUS'})
+                df = PreProcessor.clean_up_text(df)
+                self.X = df.drop(['STATUS'] + targets, axis=1) #remove #AUTHID for V1
+                self.contextual_emb = PreProcessor.process_embeddings(df, emb_model) if emb_model else []
+                self.Y = df[targets]
         self.ORIGINAL = df[['STATUS'] + targets]
         logging.info(f'X Shape: {self.X.shape}, Y Shape: {self.Y.shape}, Contextual Emb (Z) Shape: {self.contextual_emb.shape if emb_model else []}')
 
@@ -259,7 +281,7 @@ def train(emb, models, demo, kFold, hyperparameters, filepath, mode):
             X_train, y_train = my_train.combine_dataset(X_train[sf], Z_train, y_train)
             X_val, y_val = my_train.combine_dataset(X_val[sf], Z_val, y_val)
             X_test, y_test = my_train.combine_dataset(X_test[sf], Z_test, y_test)
-
+        logging.info(f"{X_train.shape}, {X_val.shape}, {X_test.shape}")
         #train and validate model
         my_train.init_models(X_shape=X_train.shape[1], kFold=kFold, hyperparameters=hyperparameters)
         my_train.fit_and_validate(X_train, y_train, X_val, y_val, target_col, save_ckpt=False)
@@ -274,9 +296,9 @@ def train(emb, models, demo, kFold, hyperparameters, filepath, mode):
     # pd.DataFrame(selected_features).to_csv(f"{ckpt}/selected_features.csv")
     logging.info(f'selected_features :{selected_features}')
 
-def regression_train(emb, models, demo, kFold, hyperparameters, filepath, mode, version):
+def regression_train(emb, models, demo, kFold, hyperparameters, filepath, mode):
     my_train = My_training(models=models, emb_model=emb)
-    dataset = Dataset(filepath, my_train.emb_model, my_train.traits,  demo, version)   
+    dataset = Dataset(filepath, my_train.emb_model, my_train.traits,  demo, task="regression")   
     logging.info(50*"*")
     for target_col in my_train.traits:
         logging.info(f'{10*"-"} {target_col} {10*"-"}')
@@ -304,11 +326,12 @@ def regression_train(emb, models, demo, kFold, hyperparameters, filepath, mode, 
 
 def final_eval(emb, models, demo, kFold, hyperparameters, filepath, mode):
     my_train = My_training(models=models, emb_model=emb)
-    dataset = Dataset(filepath, my_train.emb_model, my_train.traits,  demo)   
+    dataset = Dataset(filepath, my_train.emb_model, my_train.traits, demo)   
     if mode == 'T': test_dataset = Dataset(f'./processed_data/LIWC_mypersonality_v2.csv', my_train.emb_model, my_train.traits,  demo)   
     logging.info(50*"*")
     selected_features = {}
-    epochs = {'cOPN': 17, 'cCON': 13,'cEXT': 16, 'cAGR':17, 'cNEU':15} 
+    # epochs = {'cOPN': 17, 'cCON': 13,'cEXT': 16, 'cAGR':17, 'cNEU':15} 
+    epochs = {'cOPN': 5, 'cCON': 5,'cEXT': 5, 'cAGR':5, 'cNEU':5} 
     # my_train.test_df = test_dataset.ORIGINAL
     for target_col in my_train.traits:
         logging.info(f'{10*"-"} {target_col} {10*"-"}')
@@ -356,6 +379,17 @@ def final_eval(emb, models, demo, kFold, hyperparameters, filepath, mode):
     # my_train.test_df.to_csv(f'{ckpt}/prediction_test.csv')
     logging.info(f'{selected_features}')
     
+def get_filename(data_type, version):
+    if data_type =='fb':
+        if version == 'v2':filepath = f'./processed_data/LIWC_mypersonality_{version}.csv' 
+    elif data_type =='rd':
+        if version =='v5': filepath = f'./data/pandora_to_big5_main.csv'  
+        if version =='v5.1': filepath = f'./data/pandora_to_big5_openai_embedded.csv'  
+        if version == 'v4': filepath = f'./processed_data/pandora_to_big5_{version}.csv'  
+        if version == 'v4.1': filepath = f'./data/pandora_to_big5_openai_embedded.csv'  
+    return filepath
+
+
 def parse_arguments(argv):
     def convert_to_int_if_possible(value):
         try:
@@ -367,15 +401,15 @@ def parse_arguments(argv):
     model_type = argv[2]
     data_type = argv[3]
     mode = argv[4]
-    eval = argv[5] 
+    evaluate = argv[5] 
     demo = argv[6]
     version = argv[7]
     kFold = False 
     message = argv[8]
-    emb_models = {'1':'roberta-base', '2':'bert-base-uncased', '3':'vinai/bertweet-base', '4':'xlnet-base-cased'}
+    emb_models = {'1':'roberta-base', '2':'bert-base-uncased', '3':'vinai/bertweet-base', '4':'xlnet-base-cased', '5': 'openai'}
     emb = emb_models[emb] if emb in emb_models.keys() else None
 
-    models = ['lr', 'rf', 'xgb', 'bilstm', 'mlp']
+    models = ['bilstm', 'mlp']
     if model_type != "all" and model_type not in models:
         print(f"not a valid modeltype {model_type}")
         exit(0)  
@@ -383,46 +417,38 @@ def parse_arguments(argv):
     models = models if model_type=='all' else [model_type]
     if demo=="demo": demo =100
     demo = convert_to_int_if_possible(demo)
-    print(f"emb:{emb}, models:{models}, data_type:{data_type}, mode:{mode}, eval:{eval}, demo:{demo}, version:{version}, message:{message}, kFold={kFold}")
-    return emb, model_type, data_type, mode, eval, demo, version, kFold, message, models
+    print(f"emb:{emb}, models:{models}, data_type:{data_type}, mode:{mode}, evaluate:{evaluate}, demo:{demo}, version:{version}, message:{message}, kFold={kFold}")
+    return emb, model_type, data_type, mode, evaluate, demo, version, kFold, message, models
  
 if __name__ == "__main__":
     try:
-        emb, model_type, data_type, mode, eval, demo, version, kFold, message, models = parse_arguments(sys.argv)
-        if data_type =='fb':
-            version = 'v2'
-            filepath = f'./processed_data/LIWC_mypersonality_{version}.csv' 
-        else:
-            if version =='v5' or version =='v3': 
-                filepath = f'./data/pandora_to_big5_main.csv'  
-            else:
-                filepath = f'./data/pandora_to_big5_{version}.csv'  
-
+        emb, model_type, data_type, mode, evaluate, demo, version, kFold, message, models = parse_arguments(sys.argv)
+        filepath = get_filename(data_type, version)
         timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
-        folder = f"{data_type}_{version}_{model_type}_{emb.split('-')[0]}-{timestamp}_{eval}" if emb else  f"{version}_{model_type}-{timestamp}_{eval}"
+        folder = f"{data_type}_{version}_{model_type}_{emb.split('-')[0]}-{timestamp}_{evaluate}" if emb else  f"{version}_{model_type}-{timestamp}_{evaluate}"
         if isinstance(demo, int) : folder = f"{folder}_demo"
         ckpt = f"checkpoint/{folder}_{mode}"
         if not os.path.exists(ckpt):
             os.makedirs(f'{ckpt}/calibration/')
             os.makedirs(f'{ckpt}/models/')
         logging.basicConfig(filename=f'{ckpt}/log_{timestamp}.log', level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-        logging.info(f"emb:{emb}, models:{models}, data_type:{data_type}, mode:{mode}, eval:{eval}, demo:{demo}, version:{version}, message:{message}, kFold={kFold}")
+        logging.info(f"emb:{emb}, models:{models}, data_type:{data_type}, mode:{mode}, evaluate:{evaluate}, demo:{demo}, version:{version}, message:{message}, kFold={kFold}")
         hyperparameters = {
-            'hidden_dim' : 300,
-            'batch_size': 8,
+            'hidden_dim' : 512,
+            'batch_size': 16,
             'epochs': 100,
-            'learning_rate': 0.00001,
+            'learning_rate': 0.0001,
             'dropout_rate': 0.3,
         }
         logging.info(f"hyperparameters:{hyperparameters}")
 
-        if version =='v5': #regresssion
-            regression_train(emb, models, demo, kFold=kFold, hyperparameters=hyperparameters, filepath=filepath, mode=mode, version=version)
+        if version =='v5' or version == 'v5.1': #regresssion
+            regression_train(emb, models, demo, kFold=kFold, hyperparameters=hyperparameters, filepath=filepath, mode=mode)
             sys.exit(1) 
 
-        if eval == 'eval': 
+        if evaluate == 'eval': 
             final_eval(emb, models, demo, kFold, hyperparameters=hyperparameters, filepath=filepath, mode=mode)
-        else: # eval == 'train'
+        else: # evaluate == 'train'
             if kFold: kfold_train(emb, models, demo, filepath =filepath)
             else: train(emb, models, demo, kFold=kFold, hyperparameters=hyperparameters, filepath=filepath, mode=mode)
 

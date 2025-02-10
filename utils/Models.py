@@ -10,12 +10,11 @@ class MLP(nn.Module):
     def __init__(self, input_size, hidden_size, output_size, dropout_rate=0.3):
         super(MLP, self).__init__()
         self.fc1 = nn.Linear(input_size, hidden_size)
-        self.bn1 = nn.BatchNorm1d(hidden_size) 
-        self.relu = nn.ReLU()
-        self.dropout = nn.Dropout(dropout_rate)
         self.fc2 = nn.Linear(hidden_size, output_size)
-        self.relu2 = nn.ReLU()
         self.fc3 = nn.Linear(hidden_size, output_size)
+        self.dropout = nn.Dropout(dropout_rate)
+        self.relu = nn.ReLU()
+        self.bn1 = nn.BatchNorm1d(hidden_size) 
         # self.sigmoid =  nn.Sigmoid()
         
     def forward(self, x):
@@ -24,7 +23,7 @@ class MLP(nn.Module):
         x = self.relu(x)
         x = self.dropout(x)
         x = self.fc2(x)
-        # x = self.relu2(x)
+        # x = self.relu(x)
         # x = self.dropout(x)
         # x = self.fc3(x)
         # x = self.sigmoid(x)
@@ -106,7 +105,7 @@ class MyEstimator(BaseEstimator, ClassifierMixin):
     
     def fit(self, X, y):
         if self.kFold:
-            return train_val_kfold(self.model, X, y, self.kFold, self.batch_size, self.epochs,self.optimizer, self.criterion)
+            return train_val_rmse(self.model, X, y, self.kFold, self.batch_size, self.epochs,self.optimizer, self.criterion)
         else:   
             if self.X_val is not None:
                 return train_val(self.model, X, y, self.X_val, self.y_val, self.device, self.batch_size, self.epochs,  self.optimizer, self.criterion)
