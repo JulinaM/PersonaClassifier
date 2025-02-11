@@ -105,7 +105,7 @@ class MyEstimator(BaseEstimator, ClassifierMixin):
     
     def fit(self, X, y):
         if self.kFold:
-            return train_val_rmse(self.model, X, y, self.kFold, self.batch_size, self.epochs,self.optimizer, self.criterion)
+            return train_val_kfold(self.model, X, y, self.kFold, self.device, self.batch_size, self.epochs, self.optimizer, self.criterion)
         else:   
             if self.X_val is not None:
                 return train_val(self.model, X, y, self.X_val, self.y_val, self.device, self.batch_size, self.epochs,  self.optimizer, self.criterion)

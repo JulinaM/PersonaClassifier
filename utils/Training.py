@@ -110,13 +110,11 @@ def train_val(model, X_train, y_train, X_val, y_val, device, batch_size, epochs,
 
 def train_val_kfold(model, X, y, k_folds, device, batch_size, epochs, optimizer, criterion, max_grad_norm=1.0):
     logging.info(f'{model.__class__.__name__};  batch_size={batch_size}, k_folds={k_folds}')
+    k_folds = 5
     dataset = TensorDataset(torch.tensor(X, dtype=torch.float32), torch.tensor(y, dtype=torch.float32))
     targets = np.array([target for _, target in dataset]) 
-
     kf = StratifiedKFold(n_splits=k_folds, shuffle=True, random_state=42)
     fold_results = {}
-    early_stopper = EarlyStopper(patience=3, min_delta=0.001)
-
     for fold, (train_idx, val_idx) in enumerate(kf.split(dataset, targets)):
         train_subset = Subset(dataset, train_idx)
         val_subset = Subset(dataset, val_idx)
@@ -124,15 +122,13 @@ def train_val_kfold(model, X, y, k_folds, device, batch_size, epochs, optimizer,
         val_loader = DataLoader(val_subset, batch_size=batch_size, shuffle=False)
 
         for epoch in range(epochs):
-            train_accuracy, train_loss = _train_one_epoch(model, train_loader, device, criterion, optimizer, max_grad_norm)
+            train_acc, train_loss = _train_one_epoch(model, train_loader, device, criterion, optimizer, max_grad_norm)
 
-        val_accuracy, val_loss, val_preds, val_probas, val_targets = _validate_one_epoch(model, val_loader,  device, criterion)
-        fold_results[fold] = {'train_loss': train_loss, 'train_acc': train_accuracy, 'val_loss': val_loss, 'val_accuracy': val_accuracy}
-        logging.info(f'Fold {fold+1}/{k_folds} - Train:: Loss: {train_loss:.4f}, Acc: {train_accuracy:.4f} and Val:: Loss: {val_loss:.4f}, Acc: {val_accuracy:.4f}')
-        if early_stopper.early_stop(val_loss):   
-            logging.info(f'For {fold+1}, Early stopping at epoch {epoch+1}' )
-            break
-    avg_val_acc = sum(fold['val_accuracy'] for fold in fold_results.values()) / k_folds
+        val_acc, val_loss, val_preds, val_probas, val_targets = _validate_one_epoch(model, val_loader,  device, criterion)
+        fold_results[fold] = {'train_loss': train_loss, 'train_acc': train_acc, 'val_loss': val_loss, 'val_acc': val_acc}
+        logging.info(f'Fold {fold+1}/{k_folds} - Train:: Loss: {train_loss:.4f}, Acc: {train_acc:.4f} and Val:: Loss: {val_loss:.4f}, Acc: {val_acc:.4f}')
+
+    avg_val_acc = sum(fold['val_acc'] for fold in fold_results.values()) / k_folds
     avg_val_loss = sum(fold['val_loss'] for fold in fold_results.values()) / k_folds
     logging.info(f'Average Val acc: {avg_val_acc} and Val loss: {avg_val_loss}')
     return avg_val_acc, torch.cat(val_preds), torch.cat(val_probas), torch.cat(val_targets)
