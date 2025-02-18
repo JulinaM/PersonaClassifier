@@ -76,7 +76,7 @@ def predict(model, X, device, threshold=0.5):
     return pred.cpu().numpy(), probs.cpu().numpy()
 
 def train(model, X, y, device, batch_size, epochs, optimizer, criterion, max_grad_norm=1.0):
-    logging.info(f'{model.__class__.__name__};  batch_size={batch_size}, dropout={model.dropout}')
+    logging.info(f'{model.__class__.__name__};  batch_size={batch_size}, dropout={model.dropout}, epochs={epochs}')
     train_dataset = TensorDataset(torch.tensor(X, dtype=torch.float32), torch.tensor(y, dtype=torch.float32))
     train_loader =  DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
 
@@ -86,7 +86,7 @@ def train(model, X, y, device, batch_size, epochs, optimizer, criterion, max_gra
             logging.info(f'Epoch: [{epoch + 1}/{epochs}], Train:: Loss: {train_loss:.4f}, Acc:{train_accuracy:.4f}')
     
 def train_val(model, X_train, y_train, X_val, y_val, device, batch_size, epochs, optimizer, criterion, max_grad_norm=1.0):
-    logging.info(f'{model.__class__.__name__};  batch_size={batch_size}, dropout={model.dropout}')
+    logging.info(f'{model.__class__.__name__};  batch_size={batch_size}, dropout={model.dropout}, epochs={epochs}')
     train_dataset = TensorDataset(torch.tensor(X_train, dtype=torch.float32), torch.tensor(y_train, dtype=torch.float32))
     val_dataset = TensorDataset(torch.tensor(X_val, dtype=torch.float32), torch.tensor(y_val, dtype=torch.float32))
     train_loader =  DataLoader(train_dataset, batch_size=batch_size, shuffle=True, drop_last=True)
@@ -109,7 +109,7 @@ def train_val(model, X_train, y_train, X_val, y_val, device, batch_size, epochs,
     return val_accuracy, torch.cat(val_preds), torch.cat(val_probas), torch.cat(val_targets)
 
 def train_val_kfold(model, X, y, k_folds, device, batch_size, epochs, optimizer, criterion, max_grad_norm=1.0):
-    logging.info(f'{model.__class__.__name__};  batch_size={batch_size}, k_folds={k_folds}')
+    logging.info(f'{model.__class__.__name__};  batch_size={batch_size}, k_folds={k_folds}, epochs={epochs}')
     k_folds = 5
     dataset = TensorDataset(torch.tensor(X, dtype=torch.float32), torch.tensor(y, dtype=torch.float32))
     targets = np.array([target for _, target in dataset]) 
@@ -123,7 +123,6 @@ def train_val_kfold(model, X, y, k_folds, device, batch_size, epochs, optimizer,
 
         for epoch in range(epochs):
             train_acc, train_loss = _train_one_epoch(model, train_loader, device, criterion, optimizer, max_grad_norm)
-
         val_acc, val_loss, val_preds, val_probas, val_targets = _validate_one_epoch(model, val_loader,  device, criterion)
         fold_results[fold] = {'train_loss': train_loss, 'train_acc': train_acc, 'val_loss': val_loss, 'val_acc': val_acc}
         logging.info(f'Fold {fold+1}/{k_folds} - Train:: Loss: {train_loss:.4f}, Acc: {train_acc:.4f} and Val:: Loss: {val_loss:.4f}, Acc: {val_acc:.4f}')

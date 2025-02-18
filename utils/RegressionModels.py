@@ -1,12 +1,11 @@
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import DataLoader, TensorDataset
-from sklearn.model_selection import train_test_split
 import logging
 import numpy as np
+from torch.utils.data import DataLoader, TensorDataset, Subset
+from sklearn.model_selection import train_test_split, KFold, StratifiedKFold
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
-logging.basicConfig(level=logging.INFO)
 import matplotlib.pyplot as plt
 
 class RegressionModel(nn.Module):
@@ -126,7 +125,7 @@ def plot_learning_curve(train_losses, val_losses, filepath):
     plt.show()
 
 def train_val(model, X_train, y_train, X_val, y_val, device, batch_size, epochs, optimizer, max_grad_norm=1.0):
-    logging.info(f'Training {model.__class__.__name__} with batch_size={batch_size}, dropout={model.dropout}')
+    logging.info(f'Training {model.__class__.__name__} with batch_size={batch_size}, dropout={model.dropout}, epochs={epochs}')
     train_dataset = TensorDataset(torch.tensor(X_train, dtype=torch.float32), torch.tensor(y_train, dtype=torch.float32))
     val_dataset = TensorDataset(torch.tensor(X_val, dtype=torch.float32), torch.tensor(y_val, dtype=torch.float32))
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, drop_last=True)
@@ -147,6 +146,20 @@ def train_val(model, X_train, y_train, X_val, y_val, device, batch_size, epochs,
         train_losses.append(train_loss)
         val_losses.append(val_loss)
     return train_losses, val_losses
+
+def train(model, X_train, y_train, device, batch_size, epochs, optimizer, max_grad_norm=1.0):
+    logging.info(f'Training {model.__class__.__name__} with batch_size={batch_size}, dropout={model.dropout}, epochs={epochs}')
+    train_dataset = TensorDataset(torch.tensor(X_train, dtype=torch.float32), torch.tensor(y_train, dtype=torch.float32))
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, drop_last=True)
+    criterion = nn.MSELoss()  # Use MSELoss for RMSE calculation
+    # criterion = nn.MAELoss()
+    train_losses =  []
+    for epoch in range(epochs):
+        train_loss = _train_one_epoch(model, train_loader, device, criterion, optimizer, max_grad_norm)
+        if epoch % 4 == 0:
+            logging.info(f'Epoch [{epoch + 1}/{epochs}], Train MSE: {train_loss:.4f}')
+        train_losses.append(train_loss)
+    return train_losses
     
 def evaluate_model(model, X_test, y_test, device, tolerance=0.10):
     def regression_accuracy(preds, targets, tolerance=0.10):
@@ -183,3 +196,28 @@ def evaluate_model(model, X_test, y_test, device, tolerance=0.10):
     logging.info(f"Test MAPE: {mape:.2f}%")
     return preds, targets, mse, mae, r2, acc, mape
 
+def train_val_kfold(model, X, y, k_folds, device, batch_size, epochs, optimizer, max_grad_norm=1.0):
+    logging.info(f'{model.__class__.__name__};  batch_size={batch_size}, k_folds={k_folds}, epochs={epochs}')
+    k_folds = 5
+    dataset = TensorDataset(torch.tensor(X, dtype=torch.float32), torch.tensor(y, dtype=torch.float32))
+    targets = np.array([target for _, target in dataset]) 
+    # kf = StratifiedKFold(n_splits=k_folds, shuffle=True, random_state=42)
+    kf = KFold(n_splits=k_folds, shuffle=True, random_state=42)
+
+    fold_results = {}
+    criterion = nn.MSELoss()  # Use MSELoss for RMSE calculation
+
+    for fold, (train_idx, val_idx) in enumerate(kf.split(dataset, targets)):
+        train_subset = Subset(dataset, train_idx)
+        val_subset = Subset(dataset, val_idx)
+        train_loader = DataLoader(train_subset, batch_size=batch_size, shuffle=True)
+        val_loader = DataLoader(val_subset, batch_size=batch_size, shuffle=False)
+
+        for epoch in range(epochs):
+            train_loss = _train_one_epoch(model, train_loader, device, criterion, optimizer, max_grad_norm)
+        val_loss, val_preds, val_targets = _validate_one_epoch(model, val_loader, device, criterion)
+        fold_results[fold] = {'train_loss': train_loss,  'val_loss': val_loss}
+        logging.info(f'Fold {fold+1}/{k_folds} - Train:: Loss: {train_loss:.4f} and Val:: Loss: {val_loss:.4f}')
+    avg_val_loss = sum(fold['val_loss'] for fold in fold_results.values()) / k_folds
+    logging.info(f'Average Val loss: {avg_val_loss}')
+    return avg_val_loss
