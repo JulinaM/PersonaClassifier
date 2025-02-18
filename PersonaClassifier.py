@@ -18,6 +18,7 @@ from sklearn.model_selection import train_test_split, KFold, StratifiedKFold
 from sklearn.calibration import CalibratedClassifierCV
 from utils.Training import _train_one_epoch, _validate_one_epoch, predict, EarlyStopper
 from torch.utils.data import DataLoader, TensorDataset, Subset
+from utils.RegressionModels import RegressionModel, train_val, train, train_val_kfold, plot_learning_curve, BiLSTMClassifier, evaluate_model
 import shap
 shap.initjs()
 
@@ -154,7 +155,7 @@ class My_training:
             probs = estimator.predict_proba(X)[:, 1] #handle for svm decision_function
             if calibrate: generate_cal_result(y, pred, probs, target_col, f'{ckpt}/calibration/uncal_{model}_{target_col}.png')
             self.test_outputs[model][target_col] = (y, pred, probs)
-            # self.test_df[f'{model}_{target_col}'] = pred
+            self.test_df[f'{model}_{target_col}'] = pred
             logging.info(f'{model} Test Acc: {accuracy_score(y, pred):.2f}')
         logging.info(f'Evaluation completed.')
 
@@ -189,29 +190,6 @@ class My_training:
             #     s = performance_df[performance_df['Classifier'] ==col]
             #     best_model_row = s.loc[s['Accuracy'].idxmax()]
             #     logging.info(f'For {best_model_row["Classifier"]}, {best_model_row["Model"]},  {best_model_row["Accuracy"]}')
-
-def kfold_train(emb, models, demo, kFold, hyperparameters, filepath, mode):
-    logging.info(f'K-Fold Training started: {emb} {models} {demo}')
-    my_train = My_training(models=models, emb_model=emb)
-    dataset = Dataset(filepath, my_train.emb_model, my_train.traits, demo)   
-    logging.info(50*"*")
-    # lr, epochs, batch_size, k_folds = 0.001, 32, 16, 5
-    epochs = {'cOPN': 17, 'cCON': 13,'cEXT': 16, 'cAGR':17, 'cNEU':15} 
-    val_outputs, test_outputs, cal_test_outputss, selected_features = {'mlp':{}}, {'mlp':{}}, {'mlp':{}}, {}
-    for target_col in my_train.traits:
-        logging.info(f'{10*"-"} {target_col} {10*"-"}')
-        X, Z, y = dataset.X, dataset.contextual_emb, dataset.Y[[target_col]]
-        Z_train, Z_test, y_train, y_test, = train_test_split(Z, y, stratify=y, test_size=0.1, shuffle=True, random_state=42)
-        X_train, X_test = np.array(Z_train), np.array(Z_test)
-        y_train, y_test = np.array(y_train).ravel(), np.array(y_test).ravel()
-        logging.info(f'X Train: {X_train.shape}, X Test: {X_test.shape} Y Train: {y_train.shape}, Y Test: {y_test.shape}')
-        hyperparameters['epochs'] = epochs[target_col]
-        my_train.init_models(X_shape=X_train.shape[1], hyperparameters=hyperparameters, kFold=kFold)
-        my_train.fit(X_train, y_train, target_col, save_ckpt=False)
-        my_train.evaluate_models(X_test, y_test, target_col, calibrate=False)
-        logging.info(50*"-")
-    # my_train.display_metrics(my_train.val_outputs, initial='val')
-    my_train.display_metrics(my_train.test_outputs, initial='test')
    
 def train(emb, models, demo, kFold, hyperparameters, filepath, mode):
     my_train = My_training(models=models, emb_model=emb)
@@ -264,65 +242,35 @@ def train(emb, models, demo, kFold, hyperparameters, filepath, mode):
     # pd.DataFrame(selected_features).to_csv(f"{ckpt}/selected_features.csv")
     logging.info(f'selected_features :{selected_features}')
 
-def regression_final_eval(emb, models, demo, kFold, hyperparameters, filepath, mode):
-    my_train = My_training(models=models, emb_model=emb)
-    dataset = Dataset(filepath, my_train.emb_model, my_train.traits,  demo, task="regression")   
-    logging.info(50*"*")
-    epochs = {'cOPN': 30, 'cCON': 34,'cEXT': 38, 'cAGR':35, 'cNEU':32} 
-    for target_col in my_train.traits:
-        logging.info(f'{10*"-"} {target_col} {10*"-"}')
-        X, Z, y = dataset.X, dataset.contextual_emb, dataset.Y[[target_col]]
-        if mode == "S1":
-            Z_train, Z_test, y_train, y_test, = train_test_split(Z, y, test_size=0.1, shuffle=True, random_state=42)
-            X_train, X_test = np.array(Z_train), np.array(Z_test)
-            y_train, y_test = np.array(y_train).ravel(), np.array(y_test).ravel()
-
-        logging.info(f"{X_train.shape},  {X_test.shape}")
-        from utils.RegressionModels import RegressionModel, train, evaluate_model, plot_learning_curve, BiLSTMClassifier
-        import torch.optim as optim
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        model = RegressionModel(input_dim=X_train.shape[1], hidden_dim=hyperparameters["hidden_dim"], dropout=hyperparameters["dropout_rate"]).to(device)
-        optimizer = optim.Adam(model.parameters(), lr=hyperparameters["learning_rate"])
-        train_losses = train(model, X_train, y_train, device=device, batch_size=hyperparameters["batch_size"], epochs=epochs[target_col], optimizer=optimizer, max_grad_norm=1.0)
-        _, _, mse, mae, r2, _, _ = evaluate_model(model, X_test, y_test, device)
-        logging.info(f"Test MSE: {mse:.4f}")
-
-def regression_train(emb, models, demo, kFold, hyperparameters, filepath, mode):
-    my_train = My_training(models=models, emb_model=emb)
-    dataset = Dataset(filepath, my_train.emb_model, my_train.traits,  demo, task="regression")   
-    logging.info(50*"*")
-    for target_col in my_train.traits:
-        logging.info(f'{10*"-"} {target_col} {10*"-"}')
-        X, Z, y = dataset.X, dataset.contextual_emb, dataset.Y[[target_col]]
-        if mode == "S1":
-            Z_train, Z_test, y_train, y_test, = train_test_split(Z, y, test_size=0.2, shuffle=True, random_state=42)
-            Z_val, Z_test, y_val, y_test, = train_test_split(Z_test, y_test, test_size=0.5, shuffle=True, random_state=42)
-            X_train, X_val, X_test = np.array(Z_train), np.array(Z_val), np.array(Z_test)
-            y_train, y_val, y_test = np.array(y_train).ravel(), np.array(y_val).ravel(), np.array(y_test).ravel()
-
-        logging.info(f"{X_train.shape}, {X_val.shape}, {X_test.shape}")
-        from utils.RegressionModels import RegressionModel, train_val, evaluate_model, plot_learning_curve, BiLSTMClassifier
-        import torch.optim as optim
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        # model = BiLSTMClassifier(input_dim=X_train.shape[1], hidden_dim=hyperparameters["hidden_dim"], dropout=hyperparameters["dropout_rate"]).to(device)
-        model = RegressionModel(input_dim=X_train.shape[1], hidden_dim=hyperparameters["hidden_dim"], dropout=hyperparameters["dropout_rate"]).to(device)
-        optimizer = optim.Adam(model.parameters(), lr=hyperparameters["learning_rate"])
-        train_losses, val_losses = train_val(model, X_train, y_train, X_val, y_val,
-            device=device, batch_size=hyperparameters["batch_size"], epochs=hyperparameters["epochs"], optimizer=optimizer, max_grad_norm=1.0
-        )
-        plot_learning_curve(train_losses, val_losses, f"{ckpt}/learning_curve_{target_col}.png")
-        logging.info(f'Final Validation RMSE: {val_losses[-1]:.4f}')
-        _, _, mse, mae, r2, _, _ = evaluate_model(model, X_test, y_test, device)
-        logging.info(f"Test MSE: {mse:.4f}")
+# def kfold_eval(emb, models, demo, kFold, hyperparameters, filepath, mode):
+#     logging.info(f'K-Fold Training started: {emb} {models} {demo}')
+#     my_train = My_training(models=models, emb_model=emb)
+#     dataset = Dataset(filepath, my_train.emb_model, my_train.traits, demo)   
+#     logging.info(50*"*")
+#     val_outputs, test_outputs, cal_test_outputss, selected_features = {'mlp':{}}, {'mlp':{}}, {'mlp':{}}, {}
+#     for target_col in my_train.traits:
+#         logging.info(f'{10*"-"} {target_col} {10*"-"}')
+#         X, Z, y = dataset.X, dataset.contextual_emb, dataset.Y[[target_col]]
+#         Z_train, Z_test, y_train, y_test, = train_test_split(Z, y, stratify=y, test_size=0.1, shuffle=True, random_state=42)
+#         X_train, X_test = np.array(Z_train), np.array(Z_test)
+#         y_train, y_test = np.array(y_train).ravel(), np.array(y_test).ravel()
+#         logging.info(f'X Train: {X_train.shape}, X Test: {X_test.shape} Y Train: {y_train.shape}, Y Test: {y_test.shape}')
+#         hyperparameters['epochs'] = 10
+#         my_train.init_models(X_shape=X_train.shape[1], hyperparameters=hyperparameters, kFold=kFold)
+#         my_train.fit(X_train, y_train, target_col, save_ckpt=False)
+#         my_train.evaluate_models(X_test, y_test, target_col, calibrate=False)
+#         logging.info(50*"-")
+#     # my_train.display_metrics(my_train.val_outputs, initial='val')
+#     my_train.display_metrics(my_train.test_outputs, initial='test')
 
 def final_eval(emb, models, demo, kFold, hyperparameters, filepath, mode):
+    logging.info(f'Training started: {emb} {models} {demo} {kFold}')
     my_train = My_training(models=models, emb_model=emb)
     dataset = Dataset(filepath, my_train.emb_model, my_train.traits, demo)   
     if mode == 'T': test_dataset = Dataset(f'./processed_data/LIWC_mypersonality_v2.csv', my_train.emb_model, my_train.traits,  demo)   
     logging.info(50*"*")
     selected_features = {}
-    # epochs = {'cOPN': 17, 'cCON': 13,'cEXT': 16, 'cAGR':17, 'cNEU':15} 
-    epochs = {'cOPN': 5, 'cCON': 5,'cEXT': 5, 'cAGR':5, 'cNEU':5} 
+    epochs = {'cOPN': 17, 'cCON': 13,'cEXT': 16, 'cAGR':17, 'cNEU':15} 
     # my_train.test_df = test_dataset.ORIGINAL
     for target_col in my_train.traits:
         logging.info(f'{10*"-"} {target_col} {10*"-"}')
@@ -354,7 +302,8 @@ def final_eval(emb, models, demo, kFold, hyperparameters, filepath, mode):
             y_train, y_test = np.array(y_train).ravel(), np.array(y_test).ravel()
         logging.info(f'X Train: {X_train.shape}, X Test: {X_test.shape} Y Train: {y_train.shape}, Y Test: {y_test.shape}')
 
-        hyperparameters['epochs'] = epochs[target_col]
+        my_train.test_df = dataset.ORIGINAL
+        hyperparameters['epochs'] = 5 if kFold else epochs[target_col]
         my_train.init_models(X_shape=X_train.shape[1], hyperparameters=hyperparameters, kFold=kFold)
         my_train.fit(X_train, y_train, target_col, save_ckpt=True)
         my_train.evaluate_models(X_test, y_test, target_col, calibrate=True)
@@ -366,9 +315,54 @@ def final_eval(emb, models, demo, kFold, hyperparameters, filepath, mode):
         # # shap.summary_plot(shap_values, X_test[sf], feature_names=sf, max_display=5)
         # plt.savefig(f"{ckpt}/bee_swarm_{target_col}.png", dpi=150, bbox_inches='tight')
 
-    my_train.display_metrics(my_train.test_outputs, initial='final-test')
-    # my_train.test_df.to_csv(f'{ckpt}/prediction_test.csv')
+    my_train.display_metrics(my_train.test_outputs, initial=f'final_test_kf' if kFold else 'final_test')
+    my_train.test_df.to_csv(f'{ckpt}/prediction_test.csv')
     logging.info(f'{selected_features}')
+
+def regression_train(emb, models, demo, kFold, hyperparameters, filepath, mode):
+    my_train = My_training(models=models, emb_model=emb)
+    dataset = Dataset(filepath, my_train.emb_model, my_train.traits,  demo, task="regression")   
+    logging.info(50*"*")
+    for target_col in my_train.traits:
+        logging.info(f'{10*"-"} {target_col} {10*"-"}')
+        X, Z, y = dataset.X, dataset.contextual_emb, dataset.Y[[target_col]]
+        Z_train, Z_test, y_train, y_test, = train_test_split(Z, y, test_size=0.2, shuffle=True, random_state=42)
+        Z_val, Z_test, y_val, y_test, = train_test_split(Z_test, y_test, test_size=0.5, shuffle=True, random_state=42)
+        X_train, X_val, X_test = np.array(Z_train), np.array(Z_val), np.array(Z_test)
+        y_train, y_val, y_test = np.array(y_train).ravel(), np.array(y_val).ravel(), np.array(y_test).ravel()
+        logging.info(f"{X_train.shape}, {X_val.shape}, {X_test.shape}")
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        # model = BiLSTMClassifier(input_dim=X_train.shape[1], hidden_dim=hyperparameters["hidden_dim"], dropout=hyperparameters["dropout_rate"]).to(device)
+        model = RegressionModel(input_dim=X_train.shape[1], hidden_dim=hyperparameters["hidden_dim"], dropout=hyperparameters["dropout_rate"]).to(device)
+        optimizer = torch.optim.Adam(model.parameters(), lr=hyperparameters["learning_rate"])
+        train_losses, val_losses = train_val(model, X_train, y_train, X_val, y_val,
+            device=device, batch_size=hyperparameters["batch_size"], epochs=hyperparameters["epochs"], optimizer=optimizer, max_grad_norm=1.0
+        )
+        plot_learning_curve(train_losses, val_losses, f"{ckpt}/learning_curve_{target_col}.png")
+        logging.info(f'Final Validation RMSE: {val_losses[-1]:.4f}')
+        _, _, mse, mae, r2, _, _ = evaluate_model(model, X_test, y_test, device)
+        logging.info(f"Test MSE: {mse:.4f}")
+
+def regression_final_eval(emb, models, demo, kFold, hyperparameters, filepath, mode):
+    my_train = My_training(models=models, emb_model=emb)
+    dataset = Dataset(filepath, my_train.emb_model, my_train.traits,  demo, task="regression")   
+    logging.info(50*"*")
+    # epochs = {'cOPN': 30, 'cCON': 34,'cEXT': 38, 'cAGR':35, 'cNEU':32} 
+    for target_col in my_train.traits:
+        logging.info(f'{10*"-"} {target_col} {10*"-"}')
+        X, Z, y = dataset.X, dataset.contextual_emb, dataset.Y[[target_col]]
+        Z_train, Z_test, y_train, y_test, = train_test_split(Z, y, test_size=0.1, shuffle=True, random_state=42)
+        X_train, X_test = np.array(Z_train), np.array(Z_test)
+        y_train, y_test = np.array(y_train).ravel(), np.array(y_test).ravel()
+        logging.info(f"{X_train.shape},  {X_test.shape}")
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        model = RegressionModel(input_dim=X_train.shape[1], hidden_dim=hyperparameters["hidden_dim"], dropout=hyperparameters["dropout_rate"]).to(device)
+        optimizer = torch.optim.Adam(model.parameters(), lr=hyperparameters["learning_rate"])
+        val_lossess = train_val_kfold(model, X_train, y_train, True,
+         device=device, batch_size=hyperparameters["batch_size"],
+          epochs=5, optimizer=optimizer, max_grad_norm=1.0)
+        _, _, mse, mae, r2, _, _ = evaluate_model(model, X_test, y_test, device)
+        logging.info(f"Test MSE: {mse:.4f}")
     
 def get_filename(data_type, version, emb_model, demo):
     if data_type =='fb':
@@ -407,11 +401,16 @@ def parse_arguments(argv):
 
     models = models if model_type=='all' else [model_type]
     if demo=="demo": demo =100
-    if kFold =="kfold" or kFold =='kFold':kFold = True 
+    kFold = True if kFold =="kfold" or kFold =='kFold' else False
     demo = convert_to_int_if_possible(demo)
     print(f"emb:{emb}, models:{models}, data_type:{data_type}, mode:{mode}, evaluate:{evaluate}, demo:{demo}, version:{version}, message:{message}, kFold={kFold}")
     return emb, model_type, data_type, mode, evaluate, demo, version, kFold, message, models
  
+def set_ckpt(value):
+    print(f'setting ckpt : {value}')
+    global ckpt
+    ckpt = value
+
 if __name__ == "__main__":
     try:
         emb, model_type, data_type, mode, evaluate, demo, version, kFold, message, models = parse_arguments(sys.argv)
@@ -428,23 +427,23 @@ if __name__ == "__main__":
         logging.info(f"emb:{emb}, models:{models}, data_type:{data_type}, mode:{mode}, evaluate:{evaluate}, demo:{demo}, version:{version}, message:{message}, kFold={kFold}")
         hyperparameters = {
             'hidden_dim' : 512,
-            'batch_size': 16,
-            'epochs': 100,
+            'batch_size': 8,
+            'epochs': 5,
             'learning_rate': 0.0001,
             'dropout_rate': 0.3,
         }
         logging.info(f"hyperparameters:{hyperparameters}")
 
         if version =='v5' or version == 'v5.1': #regresssion
-            # regression_train(emb, models, demo, kFold=kFold, hyperparameters=hyperparameters, filepath=filepath, mode=mode)
-            regression_final_eval(emb, models, demo, kFold=kFold, hyperparameters=hyperparameters, filepath=filepath, mode=mode)
+            if kFold: 
+                regression_final_eval(emb, models, demo, kFold=kFold, hyperparameters=hyperparameters, filepath=filepath, mode=mode)
+            else: regression_train(emb, models, demo, kFold=kFold, hyperparameters=hyperparameters, filepath=filepath, mode=mode)
             sys.exit(1) 
 
-        if evaluate == 'eval': 
-            final_eval(emb, models, demo, kFold, hyperparameters=hyperparameters, filepath=filepath, mode=mode)
-        else: # evaluate == 'train'
-            if kFold: kfold_train(emb, models, demo, kFold=kFold, hyperparameters=hyperparameters, filepath=filepath, mode=mode)
-            else: train(emb, models, demo, kFold=kFold, hyperparameters=hyperparameters, filepath=filepath, mode=mode)
+        # if kFold: kfold_train(emb, models, demo, kFold=kFold, hyperparameters=hyperparameters, filepath=filepath, mode=mode)
+
+        if evaluate == 'train': train(emb, models, demo, kFold=False, hyperparameters=hyperparameters, filepath=filepath, mode=mode)
+        else: final_eval(emb, models, demo, kFold=kFold, hyperparameters=hyperparameters, filepath=filepath, mode=mode)
 
     except:
         traceback.print_exc()
