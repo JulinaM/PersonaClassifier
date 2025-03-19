@@ -54,9 +54,11 @@ class Dataset:
                 self.contextual_emb = pd.DataFrame(df["openai_embedding"].to_list(), index=df.index)
                 self.Y = df[targets]
             else: #roberta-embedding
+                print(f'{filepath}')
                 df = df[['body', 'agreeableness', 'openness', 'conscientiousness', 'extraversion', 'neuroticism']] # more embedding
                 df = df.rename(columns= { 'body': 'STATUS', 'agreeableness':'cAGR', 'openness':'cOPN', 'conscientiousness':'cCON', 'extraversion':'cEXT', 'neuroticism':'cNEU'})
-                self.X = df.drop(['STATUS', 'openai_embedding'] + targets, axis=1) # doesn't support statistical features 
+                df = PreProcessor.clean_up_text(df)
+                self.X = df.drop(['STATUS'] + targets, axis=1)
                 self.contextual_emb = PreProcessor.process_embeddings(df, emb_model) if emb_model else []
                 self.Y = df[targets]
         elif task == "classification":
@@ -67,7 +69,6 @@ class Dataset:
                 self.X = df.drop(['STATUS', 'openai_embedding'] + targets, axis=1) # doesn't support statistical features 
                 df['openai_embedding'] = df['openai_embedding'].apply(eval).apply(np.array)
                 self.contextual_emb = pd.DataFrame(df["openai_embedding"].to_list(), index=df.index)
-                # self.contextual_emb = df['openai_embedding'].apply(eval).apply(np.array)
                 self.Y = df[targets]
             else:
                 df = df.loc[:, ~df.columns.str.contains('^Unnamed')]
@@ -326,10 +327,17 @@ def regression_train(emb, models, demo, kFold, hyperparameters, filepath, mode):
     for target_col in my_train.traits:
         logging.info(f'{10*"-"} {target_col} {10*"-"}')
         X, Z, y = dataset.X, dataset.contextual_emb, dataset.Y[[target_col]]
-        Z_train, Z_test, y_train, y_test, = train_test_split(Z, y, test_size=0.2, shuffle=True, random_state=42)
-        Z_val, Z_test, y_val, y_test, = train_test_split(Z_test, y_test, test_size=0.5, shuffle=True, random_state=42)
-        X_train, X_val, X_test = np.array(Z_train), np.array(Z_val), np.array(Z_test)
-        y_train, y_val, y_test = np.array(y_train).ravel(), np.array(y_val).ravel(), np.array(y_test).ravel()
+        if mode == "S0":
+            X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, shuffle=True, random_state=42)
+            X_test, X_val, y_test, y_val = train_test_split(X_test, y_test, test_size=0.5, shuffle=True, random_state=42)
+            X_train, X_val, X_test  = my_train.scale_features(X_train), my_train.scale_features(X_val), my_train.scale_features(X_test)
+            X_train, X_val, X_test = np.array(X_train), np.array(X_val), np.array(X_test)
+            y_train, y_val, y_test = np.array(y_train).ravel(), np.array(y_val).ravel(), np.array(y_test).ravel()
+        else:
+            Z_train, Z_test, y_train, y_test, = train_test_split(Z, y, test_size=0.2, shuffle=True, random_state=42)
+            Z_val, Z_test, y_val, y_test, = train_test_split(Z_test, y_test, test_size=0.5, shuffle=True, random_state=42)
+            X_train, X_val, X_test = np.array(Z_train), np.array(Z_val), np.array(Z_test)
+            y_train, y_val, y_test = np.array(y_train).ravel(), np.array(y_val).ravel(), np.array(y_test).ravel()
         logging.info(f"{X_train.shape}, {X_val.shape}, {X_test.shape}")
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         # model = BiLSTMClassifier(input_dim=X_train.shape[1], hidden_dim=hyperparameters["hidden_dim"], dropout=hyperparameters["dropout_rate"]).to(device)
@@ -370,7 +378,7 @@ def get_filename(data_type, version, emb_model, demo):
     elif data_type =='rd':
         if version =='v5': filepath = f'./data/pandora_to_big5_main.csv'  
         if version =='v5.1': filepath = f'./data/pandora_to_big5_openai_embedded.csv'  
-        if version == 'v4': filepath = f'./processed_data/pandora_to_big5_{version}.csv'  
+        if version == 'v4': filepath = f'./processed_data/LIWC_pandora_to_big5_v4.csv'  
         if version == 'v4.1': filepath = f'./data/pandora_to_big5_openai_embedded.csv'
     if isinstance(demo, int) and emb_model =='openai': filepath = f'./data/pandora_to_big5_openai_embedded_1000.csv'
     return filepath
@@ -394,7 +402,7 @@ def parse_arguments(argv):
     emb_models = {'1':'roberta-base', '2':'bert-base-uncased', '3':'vinai/bertweet-base', '4':'xlnet-base-cased', '5': 'openai'}
     emb = emb_models[emb] if emb in emb_models.keys() else None
 
-    models = ['bilstm', 'mlp']
+    models = [ 'bilstm', 'mlp']
     if model_type != "all" and model_type not in models:
         print(f"not a valid modeltype {model_type}")
         exit(0)  
@@ -427,8 +435,8 @@ if __name__ == "__main__":
         logging.info(f"emb:{emb}, models:{models}, data_type:{data_type}, mode:{mode}, evaluate:{evaluate}, demo:{demo}, version:{version}, message:{message}, kFold={kFold}")
         hyperparameters = {
             'hidden_dim' : 512,
-            'batch_size': 8,
-            'epochs': 5,
+            'batch_size': 16,
+            'epochs': 32,
             'learning_rate': 0.0001,
             'dropout_rate': 0.3,
         }
