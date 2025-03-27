@@ -31,32 +31,29 @@ def process_embeddings(df, model_name, batch_size=8):
         embeddings_list.append(cls_embeddings.cpu().numpy())
     return np.vstack(embeddings_list)
 
-
-df = pd.read_csv('/data2/julina/scripts/tweets/cleaned_data_by_year/2019.csv')
-df.drop_duplicates(subset=['text', 'created_at'], inplace=True)
-df = df.loc[:, ~df.columns.str.match('Unnamed')]
-
-df_r = pd.read_csv('/data2/julina/scripts/tweets/cleaned_data_by_year/2019_race.csv')
-df_r.drop_duplicates(subset=['text', 'created_at'], inplace=True)
-df_r = df_r.loc[:, ~df_r.columns.str.match('Unnamed')]
-
-df_2019 = pd.merge(df, df_r[['id', 'user_id', 'race']],  how='left', on=['id','user_id'])
-
-print(df_2019.shape)
-# df= df.drop_duplicates(subset='posts', keep='first')
-# df['posts'] = df['posts'].astype(str).fillna('')
-# df = df[df['posts'].str.strip() != '']
-# df = df[df['posts'].str.split().str.len() >= 3]
-X = process_embeddings(df_2019, 'text', 'roberta-base')
-result = df
-for target_col in ['cOPN', 'cCON', 'cEXT', 'cAGR', 'cNEU'] :
-    model_filepath = f"{checkpoint}/BiLSTMClassifier_{target_col}.json"
-    model =  BiLSTMClassifier(input_dim=768, hidden_dim=256, output_dim=1, num_layers=2, bidirectional=True, do_attention=True, dropout_rate=0.0001)
-    model.load_state_dict(torch.load(model_filepath))
-    print(f"Model loaded from {model_filepath}")
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    model.to(device)
-    preds, probas = predict(model, X, device, 0.5)
-    probs_df = pd.DataFrame(probas, columns=[target_col])
-    result = pd.concat([result, probs_df], axis=1)
-result.to_csv(f'/data/jmharja/projects/PersonaClassifier/reddit_teenagers/regression/{filename}')
+directory = "/data2/julina/scripts/tweets/cleaned_data_by_year/"
+for year in ['2019', '2020', '2021']:
+    df = pd.read_csv(f'/data2/julina/scripts/tweets/cleaned_data_by_year/{year}.csv')
+    df.drop_duplicates(subset=['text', 'created_at'], inplace=True)
+    df = df.loc[:, ~df.columns.str.match('Unnamed')]
+    # df_r = pd.read_csv(f'/data2/julina/scripts/tweets/cleaned_data_by_year/{year}_race.csv')
+    # df_r.drop_duplicates(subset=['text', 'created_at'], inplace=True)
+    # df_r = df_r.loc[:, ~df_r.columns.str.match('Unnamed')]
+    # result = pd.merge(df, df_r[['id', 'user_id', 'race']],  how='left', on=['id','user_id'])
+    # result = result[:10]
+    # print(df.shape, df_r.shape, result.shape)
+    result = df
+    print(df.shape)
+    X = process_embeddings(result[['text']], 'roberta-base')
+    for target_col in ['cOPN', 'cCON', 'cEXT', 'cAGR', 'cNEU'] :
+        model_filepath = f"{checkpoint}/BiLSTMClassifier_{target_col}.json"
+        model =  BiLSTMClassifier(input_dim=768, hidden_dim=256, output_dim=1, num_layers=2, bidirectional=True, do_attention=True, dropout_rate=0.0001)
+        model.load_state_dict(torch.load(model_filepath))
+        print(f"Model loaded from {model_filepath}")
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        model.to(device)
+        preds, probas = predict(model, X, device, 0.5)
+        probs_df = pd.DataFrame(probas, columns=[target_col])
+        result = pd.concat([result.reset_index().drop("index", axis=1), probs_df.reset_index().drop("index", axis=1)], axis=1)
+    result.to_csv(f'/data/jmharja/projects/PersonaClassifier/twitter_SU/classification/{year}_personality.csv')
+    print(f'{year} --> {result.shape}')
