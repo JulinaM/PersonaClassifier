@@ -3,3 +3,10 @@
 ./log/*
 ./old/*
 ./__pycache__/*
+./twitter_SU/*
+./reddit_teenagers/*
+./processed_data/*
+./junk/*
+./EMB_analysis/*
+./6_openai_embedding.ipynb
+./config/keys.txt
